@@ -21,6 +21,11 @@ typedef struct {
 } FocScript;
 
 typedef struct {
+    char **items;
+    size_t count;
+} FocChunkList;
+
+typedef struct {
     int sample_rate;
     int channels;
     int bits_per_sample;
@@ -31,6 +36,8 @@ typedef struct {
 
 int foc_load_script(const char *path, FocScript *script, int verbose_malformed);
 void foc_free_script(FocScript *script);
+int foc_split_text(const char *text, size_t max_chars, FocChunkList *chunks);
+void foc_free_chunks(FocChunkList *chunks);
 char *foc_slug(const char *text, size_t max_len);
 void foc_json_escape(FILE *out, const char *text);
 int foc_find_latest_cache(const char *cache_dir, const FocSegment *segment, char *json_path, size_t json_cap, char *wav_path, size_t wav_cap);

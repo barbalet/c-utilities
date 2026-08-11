@@ -12,7 +12,12 @@ TOOLS := \
 	$(BINDIR)/foc_plan \
 	$(BINDIR)/foc_wav_info \
 	$(BINDIR)/foc_aiff_info \
-	$(BINDIR)/foc_assemble_cached
+	$(BINDIR)/foc_assemble_cached \
+	$(BINDIR)/foc_assemble_manifest \
+	$(BINDIR)/foc_chunk_plan \
+	$(BINDIR)/foc_chunk_jsonl \
+	$(BINDIR)/foc_manifest_check \
+	$(BINDIR)/foc_duration_report
 
 .PHONY: all clean
 

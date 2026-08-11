@@ -147,6 +147,136 @@ void foc_free_script(FocScript *script) {
     script->count = 0;
 }
 
+static char *trim_copy(const char *start, const char *end) {
+    while (start < end && isspace((unsigned char)*start)) start++;
+    while (end > start && isspace((unsigned char)end[-1])) end--;
+    return xstrndup(start, (size_t)(end - start));
+}
+
+static int chunk_push(FocChunkList *chunks, const char *start, const char *end) {
+    char **grown;
+    char *copy = trim_copy(start, end);
+    if (!copy) return -1;
+    if (!*copy) { free(copy); return 0; }
+    grown = (char **)realloc(chunks->items, (chunks->count + 1) * sizeof(char *));
+    if (!grown) { free(copy); return -1; }
+    chunks->items = grown;
+    chunks->items[chunks->count++] = copy;
+    return 0;
+}
+
+static int split_words_to_chunks(const char *piece, size_t max_chars, FocChunkList *chunks) {
+    const char *p = piece;
+    char *current = (char *)calloc(max_chars + 2, 1);
+    size_t current_len = 0;
+    if (!current) return -1;
+    while (*p) {
+        const char *word_start;
+        const char *word_end;
+        size_t word_len;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (!*p) break;
+        word_start = p;
+        while (*p && !isspace((unsigned char)*p)) p++;
+        word_end = p;
+        word_len = (size_t)(word_end - word_start);
+        if (word_len > max_chars) {
+            if (current_len && chunk_push(chunks, current, current + current_len) != 0) { free(current); return -1; }
+            current_len = 0;
+            if (chunk_push(chunks, word_start, word_end) != 0) { free(current); return -1; }
+            continue;
+        }
+        if (current_len && current_len + 1 + word_len > max_chars) {
+            if (chunk_push(chunks, current, current + current_len) != 0) { free(current); return -1; }
+            current_len = 0;
+        }
+        if (current_len) current[current_len++] = ' ';
+        memcpy(current + current_len, word_start, word_len);
+        current_len += word_len;
+        current[current_len] = '\0';
+    }
+    if (current_len && chunk_push(chunks, current, current + current_len) != 0) { free(current); return -1; }
+    free(current);
+    return 0;
+}
+
+static int add_piece_with_limit(const char *start, const char *end, size_t max_chars, FocChunkList *chunks, char **current, size_t *current_len) {
+    char *piece = trim_copy(start, end);
+    size_t piece_len;
+    if (!piece) return -1;
+    piece_len = strlen(piece);
+    if (!piece_len) { free(piece); return 0; }
+    if (piece_len > max_chars) {
+        if (*current_len && chunk_push(chunks, *current, *current + *current_len) != 0) { free(piece); return -1; }
+        *current_len = 0;
+        if (split_words_to_chunks(piece, max_chars, chunks) != 0) { free(piece); return -1; }
+        free(piece);
+        return 0;
+    }
+    if (*current_len && *current_len + 1 + piece_len > max_chars) {
+        if (chunk_push(chunks, *current, *current + *current_len) != 0) { free(piece); return -1; }
+        *current_len = 0;
+    }
+    if (*current_len) (*current)[(*current_len)++] = ' ';
+    memcpy(*current + *current_len, piece, piece_len);
+    *current_len += piece_len;
+    (*current)[*current_len] = '\0';
+    free(piece);
+    return 0;
+}
+
+int foc_split_text(const char *text, size_t max_chars, FocChunkList *chunks) {
+    const char *sentence_start = text;
+    const char *p = text;
+    char *current;
+    size_t current_len = 0;
+    chunks->items = NULL;
+    chunks->count = 0;
+    if (max_chars == 0 || strlen(text) <= max_chars) return chunk_push(chunks, text, text + strlen(text));
+    current = (char *)calloc(max_chars + 2, 1);
+    if (!current) return -1;
+    while (1) {
+        int at_end = *p == '\0';
+        int sentence_break = !at_end && strchr(".!?", *p) && (p[1] == '\0' || isspace((unsigned char)p[1]));
+        if (at_end || sentence_break) {
+            const char *sentence_end = at_end ? p : p + 1;
+            if ((size_t)(sentence_end - sentence_start) > max_chars) {
+                const char *clause_start = sentence_start;
+                const char *q = sentence_start;
+                while (q <= sentence_end) {
+                    int clause_end = q == sentence_end || (strchr(",;:", *q) && (q[1] == '\0' || isspace((unsigned char)q[1])));
+                    if (clause_end) {
+                        const char *end = q == sentence_end ? q : q + 1;
+                        if (add_piece_with_limit(clause_start, end, max_chars, chunks, &current, &current_len) != 0) { free(current); return -1; }
+                        clause_start = q + 1;
+                    }
+                    if (q == sentence_end) break;
+                    q++;
+                }
+            } else {
+                if (add_piece_with_limit(sentence_start, sentence_end, max_chars, chunks, &current, &current_len) != 0) { free(current); return -1; }
+            }
+            if (at_end) break;
+            p++;
+            while (*p && isspace((unsigned char)*p)) p++;
+            sentence_start = p;
+            continue;
+        }
+        p++;
+    }
+    if (current_len && chunk_push(chunks, current, current + current_len) != 0) { free(current); return -1; }
+    free(current);
+    return chunks->count ? 0 : chunk_push(chunks, text, text + strlen(text));
+}
+
+void foc_free_chunks(FocChunkList *chunks) {
+    size_t i;
+    for (i = 0; i < chunks->count; i++) free(chunks->items[i]);
+    free(chunks->items);
+    chunks->items = NULL;
+    chunks->count = 0;
+}
+
 char *foc_slug(const char *text, size_t max_len) {
     char *out = (char *)malloc(max_len + 1);
     size_t w = 0;

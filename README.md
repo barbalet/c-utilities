@@ -12,6 +12,11 @@ These tools replace Python for fast script/audio plumbing:
 - `foc_wav_info`: inspect PCM WAV cache files.
 - `foc_aiff_info`: inspect generated AIFF files.
 - `foc_assemble_cached`: assemble cached PCM WAV segments into an AIFF and timing JSON.
+- `foc_assemble_manifest`: assemble exact validated cache paths from a renderer manifest into an AIFF and timing JSON.
+- `foc_chunk_plan`: report Chatterbox-style chunk counts for long script lines.
+- `foc_chunk_jsonl`: export a backend-neutral JSONL TTS chunk queue.
+- `foc_manifest_check`: verify renderer manifest cache WAV paths and audio format.
+- `foc_duration_report`: print cached segment durations and cumulative timing.
 
 Build:
 
