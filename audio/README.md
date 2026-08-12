@@ -48,7 +48,7 @@ Current native optimizations:
 - AIFF assembly copies PCM in 256 KiB blocks instead of tiny buffers.
 - `foc_assemble_manifest` writes `.tmp` files and atomically renames them into place.
 - `foc_assemble_manifest` can emit final AIFF, timing JSON, SRT, and PNG queue in one pass.
-- `foc_cache_inventory` gives live cache status without loading Chatterbox or Python.
+- `foc_cache_inventory` gives live cache status, stale duplicate counts, and optional current-script prefix coverage without loading Chatterbox or Python.
 - `foc_audio_qc` catches missing, silent, clipped, or very low-level cache audio before review.
 
 Important boundary: these tools do not perform neural TTS inference. Chatterbox
