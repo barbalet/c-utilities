@@ -319,6 +319,153 @@ void foc_json_escape(FILE *out, const char *text) {
     fputc('"', out);
 }
 
+char *foc_json_unescape(const char *start, const char *end) {
+    char *out = (char *)malloc((size_t)(end - start) + 1);
+    char *w = out;
+    const char *p = start;
+    if (!out) return NULL;
+    while (p < end) {
+        if (*p == '\\' && p + 1 < end) {
+            p++;
+            switch (*p) {
+                case '\\': *w++ = '\\'; break;
+                case '"': *w++ = '"'; break;
+                case '/': *w++ = '/'; break;
+                case 'b': *w++ = '\b'; break;
+                case 'f': *w++ = '\f'; break;
+                case 'n': *w++ = '\n'; break;
+                case 'r': *w++ = '\r'; break;
+                case 't': *w++ = '\t'; break;
+                default: *w++ = *p; break;
+            }
+            p++;
+        } else {
+            *w++ = *p++;
+        }
+    }
+    *w = '\0';
+    return out;
+}
+
+static const char *json_find_key(const char *object, size_t len, const char *key) {
+    char needle[192];
+    const char *p = object;
+    const char *end = object + len;
+    if (snprintf(needle, sizeof(needle), "\"%s\"", key) >= (int)sizeof(needle)) return NULL;
+    while (p < end) {
+        const char *hit = strstr(p, needle);
+        if (!hit || hit >= end) return NULL;
+        p = hit + strlen(needle);
+        while (p < end && isspace((unsigned char)*p)) p++;
+        if (p < end && *p == ':') return p + 1;
+    }
+    return NULL;
+}
+
+char *foc_json_get_string_slice(const char *object, size_t len, const char *key) {
+    const char *p = json_find_key(object, len, key);
+    const char *end = object + len;
+    const char *start;
+    if (!p) return NULL;
+    while (p < end && isspace((unsigned char)*p)) p++;
+    if (p >= end || *p != '"') return NULL;
+    start = ++p;
+    while (p < end) {
+        if (*p == '"' && (p == start || p[-1] != '\\')) return foc_json_unescape(start, p);
+        p++;
+    }
+    return NULL;
+}
+
+double foc_json_get_number_slice(const char *object, size_t len, const char *key, double default_value) {
+    const char *p = json_find_key(object, len, key);
+    char *parse_end = NULL;
+    double value;
+    if (!p) return default_value;
+    value = strtod(p, &parse_end);
+    return parse_end == p ? default_value : value;
+}
+
+long foc_json_get_long_slice(const char *object, size_t len, const char *key, long default_value) {
+    const char *p = json_find_key(object, len, key);
+    char *parse_end = NULL;
+    long value;
+    if (!p) return default_value;
+    value = strtol(p, &parse_end, 10);
+    return parse_end == p ? default_value : value;
+}
+
+int foc_json_each_array_object(const char *json_path, const char *array_key, FocJsonObjectCallback cb, void *ctx) {
+    size_t size = 0;
+    char *data = foc_read_file(json_path, &size);
+    char needle[192];
+    char *p;
+    char *end;
+    int count = 0;
+    (void)size;
+    if (!data) {
+        fprintf(stderr, "cannot read %s: %s\n", json_path, strerror(errno));
+        return -1;
+    }
+    if (snprintf(needle, sizeof(needle), "\"%s\"", array_key) >= (int)sizeof(needle)) {
+        free(data);
+        return -1;
+    }
+    p = strstr(data, needle);
+    if (!p) {
+        free(data);
+        return 0;
+    }
+    p = strchr(p, '[');
+    if (!p) {
+        free(data);
+        return 0;
+    }
+    p++;
+    end = data + strlen(data);
+    while (p < end) {
+        int in_string = 0;
+        int escaped = 0;
+        int depth = 0;
+        char *object_start = NULL;
+        while (p < end) {
+            if (!in_string && *p == ']') {
+                free(data);
+                return count;
+            }
+            if (!in_string && *p == '{') {
+                object_start = p;
+                depth = 1;
+                p++;
+                break;
+            }
+            p++;
+        }
+        if (!object_start) break;
+        while (p < end && depth > 0) {
+            char c = *p;
+            if (in_string) {
+                if (escaped) escaped = 0;
+                else if (c == '\\') escaped = 1;
+                else if (c == '"') in_string = 0;
+            } else {
+                if (c == '"') in_string = 1;
+                else if (c == '{') depth++;
+                else if (c == '}') depth--;
+            }
+            p++;
+        }
+        if (depth != 0) break;
+        if (cb(object_start, (size_t)(p - object_start), ctx) != 0) {
+            free(data);
+            return -1;
+        }
+        count++;
+    }
+    free(data);
+    return count;
+}
+
 int foc_has_suffix(const char *s, const char *suffix) {
     size_t a = strlen(s), b = strlen(suffix);
     return a >= b && strcmp(s + a - b, suffix) == 0;

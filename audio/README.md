@@ -17,6 +17,11 @@ These tools replace Python for fast script/audio plumbing:
 - `foc_chunk_jsonl`: export a backend-neutral JSONL TTS chunk queue.
 - `foc_manifest_check`: verify renderer manifest cache WAV paths and audio format.
 - `foc_duration_report`: print cached segment durations and cumulative timing.
+- `foc_cache_gaps`: report which script segments are cached, missing, or bad.
+- `foc_manifest_summary`: validate a timing manifest and report duration/cache sanity.
+- `foc_manifest_srt`: export a timing manifest to SRT subtitles for YouTube/upload tests.
+- `foc_png_queue`: export a timing manifest to a PNG render queue JSONL file.
+- `foc_batch_plan`: split a script into balanced TTS chunk ranges for future parallel renders.
 
 Build:
 
@@ -28,6 +33,14 @@ Example:
 
 ```sh
 c_utilities/bin/foc_plan text/foc_script_txt/foc_script.txt .cache/chatterbox/foc_script_segments 600 0.18
+```
+
+Useful after a full render:
+
+```sh
+c_utilities/bin/foc_manifest_summary text/foc_script_txt/foc_script.json
+c_utilities/bin/foc_manifest_srt text/foc_script_txt/foc_script.json text/foc_script_txt/foc_script.srt
+c_utilities/bin/foc_png_queue text/foc_script_txt/foc_script.json text/foc_script_txt/foc_script_png_queue.jsonl 1080 1920
 ```
 
 Important boundary: these tools do not perform neural TTS inference. Chatterbox

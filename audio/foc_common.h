@@ -34,12 +34,19 @@ typedef struct {
     uint64_t frames;
 } FocWavInfo;
 
+typedef int (*FocJsonObjectCallback)(const char *object, size_t len, void *ctx);
+
 int foc_load_script(const char *path, FocScript *script, int verbose_malformed);
 void foc_free_script(FocScript *script);
 int foc_split_text(const char *text, size_t max_chars, FocChunkList *chunks);
 void foc_free_chunks(FocChunkList *chunks);
 char *foc_slug(const char *text, size_t max_len);
 void foc_json_escape(FILE *out, const char *text);
+char *foc_json_unescape(const char *start, const char *end);
+int foc_json_each_array_object(const char *json_path, const char *array_key, FocJsonObjectCallback cb, void *ctx);
+char *foc_json_get_string_slice(const char *object, size_t len, const char *key);
+double foc_json_get_number_slice(const char *object, size_t len, const char *key, double default_value);
+long foc_json_get_long_slice(const char *object, size_t len, const char *key, long default_value);
 int foc_find_latest_cache(const char *cache_dir, const FocSegment *segment, char *json_path, size_t json_cap, char *wav_path, size_t wav_cap);
 double foc_json_duration_seconds(const char *path);
 int foc_json_chunk_count(const char *path);

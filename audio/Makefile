@@ -17,7 +17,12 @@ TOOLS := \
 	$(BINDIR)/foc_chunk_plan \
 	$(BINDIR)/foc_chunk_jsonl \
 	$(BINDIR)/foc_manifest_check \
-	$(BINDIR)/foc_duration_report
+	$(BINDIR)/foc_duration_report \
+	$(BINDIR)/foc_cache_gaps \
+	$(BINDIR)/foc_manifest_summary \
+	$(BINDIR)/foc_manifest_srt \
+	$(BINDIR)/foc_png_queue \
+	$(BINDIR)/foc_batch_plan
 
 .PHONY: all clean
 
