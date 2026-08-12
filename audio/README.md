@@ -22,6 +22,8 @@ These tools replace Python for fast script/audio plumbing:
 - `foc_manifest_srt`: export a timing manifest to SRT subtitles for YouTube/upload tests.
 - `foc_png_queue`: export a timing manifest to a PNG render queue JSONL file.
 - `foc_batch_plan`: split a script into balanced TTS chunk ranges for future parallel renders.
+- `foc_audio_qc`: scan exact cache WAVs from a manifest for silence, clipping, peak, and RMS.
+- `foc_cache_inventory`: recursively summarize the live Chatterbox cache without Python.
 
 Build:
 
@@ -38,10 +40,16 @@ c_utilities/bin/foc_plan text/foc_script_txt/foc_script.txt .cache/chatterbox/fo
 Useful after a full render:
 
 ```sh
-c_utilities/bin/foc_manifest_summary text/foc_script_txt/foc_script.json
-c_utilities/bin/foc_manifest_srt text/foc_script_txt/foc_script.json text/foc_script_txt/foc_script.srt
-c_utilities/bin/foc_png_queue text/foc_script_txt/foc_script.json text/foc_script_txt/foc_script_png_queue.jsonl 1080 1920
+make -C c_utilities foc-finalize
 ```
+
+Current native optimizations:
+
+- AIFF assembly copies PCM in 256 KiB blocks instead of tiny buffers.
+- `foc_assemble_manifest` writes `.tmp` files and atomically renames them into place.
+- `foc_assemble_manifest` can emit final AIFF, timing JSON, SRT, and PNG queue in one pass.
+- `foc_cache_inventory` gives live cache status without loading Chatterbox or Python.
+- `foc_audio_qc` catches missing, silent, clipped, or very low-level cache audio before review.
 
 Important boundary: these tools do not perform neural TTS inference. Chatterbox
 voice synthesis is still the slow model backend until replaced with a native

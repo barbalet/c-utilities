@@ -22,9 +22,22 @@ TOOLS := \
 	$(BINDIR)/foc_manifest_summary \
 	$(BINDIR)/foc_manifest_srt \
 	$(BINDIR)/foc_png_queue \
-	$(BINDIR)/foc_batch_plan
+	$(BINDIR)/foc_batch_plan \
+	$(BINDIR)/foc_audio_qc \
+	$(BINDIR)/foc_cache_inventory
 
-.PHONY: all clean
+FOC_SCRIPT ?= text/foc_script_txt/foc_script.txt
+FOC_PREVIEW_JSON ?= text/foc_script_txt/foc_script.python-preview.json
+FOC_FINAL_AIFF ?= text/foc_script_txt/foc_script.aiff
+FOC_FINAL_JSON ?= text/foc_script_txt/foc_script.json
+FOC_FINAL_SRT ?= text/foc_script_txt/foc_script.srt
+FOC_PNG_QUEUE ?= text/foc_script_txt/foc_script_png_queue.jsonl
+FOC_CACHE ?= .cache/chatterbox/foc_script_segments
+FOC_LINE_SILENCE ?= 0.18
+FOC_PNG_WIDTH ?= 1080
+FOC_PNG_HEIGHT ?= 1920
+
+.PHONY: all clean foc-status foc-finalize
 
 all: $(TOOLS)
 
@@ -39,3 +52,11 @@ $(BINDIR)/%: %.c $(COMMON) | $(BINDIR)
 
 clean:
 	rm -rf $(BINDIR) *.o
+
+foc-status: all
+	$(BINDIR)/foc_cache_inventory $(FOC_CACHE)
+
+foc-finalize: all
+	$(BINDIR)/foc_manifest_check $(FOC_PREVIEW_JSON)
+	$(BINDIR)/foc_assemble_manifest $(FOC_SCRIPT) $(FOC_PREVIEW_JSON) $(FOC_FINAL_AIFF) $(FOC_FINAL_JSON) $(FOC_LINE_SILENCE) $(FOC_FINAL_SRT) $(FOC_PNG_QUEUE) $(FOC_PNG_WIDTH) $(FOC_PNG_HEIGHT)
+	$(BINDIR)/foc_audio_qc $(FOC_FINAL_JSON)

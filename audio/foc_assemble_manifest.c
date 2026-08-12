@@ -1,4 +1,5 @@
 #include "foc_common.h"
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -90,19 +91,155 @@ typedef struct {
     uint64_t start, speech_end, end;
 } Item;
 
+static char *temp_path_for(const char *path) {
+    size_t n = strlen(path);
+    char *tmp = (char *)malloc(n + 5);
+    if (!tmp) return NULL;
+    memcpy(tmp, path, n);
+    memcpy(tmp + n, ".tmp", 5);
+    return tmp;
+}
+
+static int commit_temp(const char *tmp, const char *final) {
+    if (rename(tmp, final) != 0) {
+        fprintf(stderr, "rename %s -> %s failed: %s\n", tmp, final, strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+
+static void print_srt_time(FILE *out, double seconds) {
+    int ms;
+    int total;
+    int h, m, s;
+    if (seconds < 0.0) seconds = 0.0;
+    ms = (int)(seconds * 1000.0 + 0.5);
+    total = ms / 1000;
+    ms %= 1000;
+    h = total / 3600;
+    m = (total / 60) % 60;
+    s = total % 60;
+    fprintf(out, "%02d:%02d:%02d,%03d", h, m, s, ms);
+}
+
+static void print_flat_text(FILE *out, const char *text) {
+    int in_space = 0;
+    while (*text) {
+        unsigned char c = (unsigned char)*text++;
+        if (c == '\r' || c == '\n' || c == '\t') c = ' ';
+        if (c == ' ') {
+            if (!in_space) fputc(' ', out);
+            in_space = 1;
+        } else {
+            fputc(c, out);
+            in_space = 0;
+        }
+    }
+}
+
+static int write_srt_sidecar(const char *path, const Item *items, size_t count, int sample_rate) {
+    char *tmp = temp_path_for(path);
+    FILE *out;
+    size_t i;
+    if (!tmp) return -1;
+    out = fopen(tmp, "wb");
+    if (!out) {
+        perror(tmp);
+        free(tmp);
+        return -1;
+    }
+    for (i = 0; i < count; i++) {
+        const FocSegment *s = items[i].seg;
+        fprintf(out, "%zu\n", i + 1);
+        print_srt_time(out, (double)items[i].start / sample_rate);
+        fputs(" --> ", out);
+        print_srt_time(out, (double)items[i].speech_end / sample_rate);
+        fputc('\n', out);
+        print_flat_text(out, s->spoken_text);
+        fputs("\n\n", out);
+    }
+    if (fclose(out) != 0) {
+        perror(tmp);
+        remove(tmp);
+        free(tmp);
+        return -1;
+    }
+    if (commit_temp(tmp, path) != 0) {
+        remove(tmp);
+        free(tmp);
+        return -1;
+    }
+    printf("wrote %s\n", path);
+    free(tmp);
+    return 0;
+}
+
+static int write_png_queue_sidecar(const char *path, const Item *items, size_t count, int sample_rate, int width, int height) {
+    char *tmp = temp_path_for(path);
+    FILE *out;
+    size_t i;
+    if (!tmp) return -1;
+    out = fopen(tmp, "wb");
+    if (!out) {
+        perror(tmp);
+        free(tmp);
+        return -1;
+    }
+    for (i = 0; i < count; i++) {
+        const FocSegment *s = items[i].seg;
+        char *slug = foc_slug(s->spoken_text, 72);
+        char image_name[128];
+        snprintf(image_name, sizeof(image_name), "%04d-%s.png", s->index, slug ? slug : "line");
+        free(slug);
+        fprintf(out, "{\"segment_index\":%d,\"source_line\":%d,\"speaker\":", s->index, s->source_line);
+        foc_json_escape(out, s->speaker);
+        fputs(",\"spoken_text\":", out);
+        foc_json_escape(out, s->spoken_text);
+        fputs(",\"image_filename\":", out);
+        foc_json_escape(out, image_name);
+        fprintf(out, ",\"start_seconds\":%.6f,\"end_seconds\":%.6f,\"width\":%d,\"height\":%d}\n",
+                (double)items[i].start / sample_rate,
+                (double)items[i].end / sample_rate,
+                width,
+                height);
+    }
+    if (fclose(out) != 0) {
+        perror(tmp);
+        remove(tmp);
+        free(tmp);
+        return -1;
+    }
+    if (commit_temp(tmp, path) != 0) {
+        remove(tmp);
+        free(tmp);
+        return -1;
+    }
+    printf("wrote %s\n", path);
+    free(tmp);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     const char *script_path = argc > 1 ? argv[1] : "text/foc_script_txt/foc_script.txt";
     const char *manifest_path = argc > 2 ? argv[2] : "text/foc_script_txt/foc_script.python-preview.json";
     const char *out_aiff = argc > 3 ? argv[3] : "text/foc_script_txt/foc_script.aiff";
     const char *out_json = argc > 4 ? argv[4] : "text/foc_script_txt/foc_script.json";
     double silence_seconds = argc > 5 ? atof(argv[5]) : 0.18;
+    const char *out_srt = argc > 6 ? argv[6] : NULL;
+    const char *out_png_queue = argc > 7 ? argv[7] : NULL;
+    int png_width = argc > 8 ? atoi(argv[8]) : 1080;
+    int png_height = argc > 9 ? atoi(argv[9]) : 1920;
     FocScript script = {0};
     PathList paths = {0};
     Item *items = NULL;
     size_t i;
     int sample_rate = 0, channels = 0;
     uint64_t total_frames = 0, silence_frames = 0;
+    char *tmp_aiff = NULL, *tmp_json = NULL;
     FILE *aiff, *json;
+
+    if (png_width <= 0) png_width = 1080;
+    if (png_height <= 0) png_height = 1920;
 
     if (foc_load_script(script_path, &script, 0) != 0) return 2;
     if (load_manifest_cache_paths(manifest_path, &paths) != 0) return 2;
@@ -142,8 +279,12 @@ int main(int argc, char **argv) {
         items[i].end = total_frames + (i + 1 < paths.count ? silence_frames : 0);
     }
 
-    aiff = fopen(out_aiff, "wb+");
-    if (!aiff) { perror(out_aiff); return 2; }
+    tmp_aiff = temp_path_for(out_aiff);
+    tmp_json = temp_path_for(out_json);
+    if (!tmp_aiff || !tmp_json) return 3;
+
+    aiff = fopen(tmp_aiff, "wb+");
+    if (!aiff) { perror(tmp_aiff); return 2; }
     if (foc_write_aiff_header(aiff, sample_rate, total_frames, channels) != 0) return 2;
     for (i = 0; i < paths.count; i++) {
         if (foc_copy_wav_pcm16_as_aiff(aiff, items[i].wav, &items[i].info) != 0) {
@@ -153,10 +294,10 @@ int main(int argc, char **argv) {
         if (i + 1 < paths.count) foc_write_aiff_silence(aiff, silence_frames, channels);
     }
     foc_patch_aiff_header(aiff, sample_rate, total_frames, channels);
-    fclose(aiff);
+    if (fclose(aiff) != 0) { perror(tmp_aiff); return 2; }
 
-    json = fopen(out_json, "wb");
-    if (!json) { perror(out_json); return 2; }
+    json = fopen(tmp_json, "wb");
+    if (!json) { perror(tmp_json); return 2; }
     fprintf(json, "{\n  \"project\":\"foc_script\",\n  \"source_text_file\":");
     foc_json_escape(json, script_path);
     fprintf(json, ",\n  \"renderer_manifest\":");
@@ -188,11 +329,23 @@ int main(int argc, char **argv) {
         fprintf(json, "}%s\n", i + 1 == paths.count ? "" : ",");
     }
     fprintf(json, "  ]\n}\n");
-    fclose(json);
+    if (fclose(json) != 0) { perror(tmp_json); return 2; }
+
+    if (commit_temp(tmp_aiff, out_aiff) != 0) return 2;
+    if (commit_temp(tmp_json, out_json) != 0) return 2;
 
     printf("wrote %s\nwrote %s\nsegments=%zu\nduration_seconds=%.3f\n",
            out_aiff, out_json, paths.count, (double)total_frames / (double)sample_rate);
 
+    if (out_srt && strcmp(out_srt, "-") != 0) {
+        if (write_srt_sidecar(out_srt, items, paths.count, sample_rate) != 0) return 2;
+    }
+    if (out_png_queue && strcmp(out_png_queue, "-") != 0) {
+        if (write_png_queue_sidecar(out_png_queue, items, paths.count, sample_rate, png_width, png_height) != 0) return 2;
+    }
+
+    free(tmp_aiff);
+    free(tmp_json);
     free(items);
     free_paths(&paths);
     foc_free_script(&script);

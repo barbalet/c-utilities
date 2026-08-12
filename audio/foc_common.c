@@ -636,7 +636,7 @@ int foc_patch_aiff_header(FILE *out, int sample_rate, uint64_t frames, int chann
 
 int foc_copy_wav_pcm16_as_aiff(FILE *out, const char *path, const FocWavInfo *info) {
     FILE *in = fopen(path, "rb");
-    unsigned char buf[8192];
+    unsigned char buf[262144];
     uint32_t remaining = info->data_bytes;
     if (!in) return -1;
     if (info->bits_per_sample != 16) { fclose(in); return -1; }
