@@ -65,9 +65,32 @@ Verify that every `Name` in `foc_characters.txt` has a matching `Name.png`, and 
 ./foc_prepare verify-characters ../foc_characters.txt ../foc_characters
 ```
 
+Create the expanded multi-frame render plan from the base audio timing JSON. Run this from the `jackson` folder so the generated JSON contains project-relative paths:
+
+```sh
+c-utilities/foc_prepare expand-json \
+  foc_script.keyframes_only.json \
+  "foc_script PNGs" \
+  foc_characters \
+  "foc_script expanded PNGs" \
+  foc_script.json
+```
+
+Copy the existing one-PNG-per-line keyframes into their expanded global frame-number positions:
+
+```sh
+c-utilities/foc_prepare renumber-keyframes \
+  foc_script.keyframes_only.json \
+  "foc_script PNGs" \
+  "foc_script expanded PNGs"
+```
+
 ## Notes
 
 - Frame filenames use `frame_%03d_source_line_%03d.png`.
+- Expanded keyframe filenames use `frame_%06d_source_line_%03d_part_01_keyframe.png`.
+- Expanded pending frame filenames use `frame_%06d_source_line_%03d_part_%02d.png`.
+- `expand-json` assigns 6 to 20 additional frames per script line using `max(ceil(segment_duration_seconds / 7), ceil(word_count / 45))`, clamped to that range.
 - Character filenames use the exact name before the comma in `foc_characters.txt`, plus `.png`.
 - PNG dimension auditing reads the PNG IHDR header only; it does not decode image pixels.
 - The utilities do not call image generation. They prepare and verify the render workflow around it.

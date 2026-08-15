@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 typedef struct {
     char *name;
@@ -909,6 +910,783 @@ static int verify_characters(const char *characters_path, const char *characters
     return (missing || extra) ? 1 : 0;
 }
 
+typedef struct {
+    char *object_json;
+    int segment_index;
+    int source_line;
+    double start_seconds;
+    double end_seconds;
+    double segment_duration_seconds;
+    char *speaker;
+    char *source_text;
+    char *spoken_text;
+    int additional_frame_count;
+    int planned_frame_count;
+    int expanded_frame_start_index;
+    int expanded_frame_end_index;
+} SegmentInfo;
+
+typedef struct {
+    SegmentInfo *items;
+    size_t count;
+    size_t cap;
+    char *prefix_before_segments;
+    char *suffix_from_segments_close;
+} SegmentInfoList;
+
+static char *read_text_file(const char *path) {
+    FILE *f = fopen(path, "rb");
+    long size;
+    char *buf;
+
+    if (!f) {
+        fprintf(stderr, "foc_prepare: cannot open %s: %s\n", path, strerror(errno));
+        exit(1);
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        die("cannot seek input file");
+    }
+    size = ftell(f);
+    if (size < 0) {
+        fclose(f);
+        die("cannot measure input file");
+    }
+    rewind(f);
+    buf = malloc((size_t)size + 1);
+    if (!buf) {
+        fclose(f);
+        die("out of memory");
+    }
+    if (fread(buf, 1, (size_t)size, f) != (size_t)size) {
+        free(buf);
+        fclose(f);
+        die("cannot read input file");
+    }
+    buf[size] = '\0';
+    fclose(f);
+    return buf;
+}
+
+static const char *skip_ws(const char *p) {
+    while (*p && isspace((unsigned char)*p)) {
+        p++;
+    }
+    return p;
+}
+
+static char *join_path(const char *dir, const char *name) {
+    size_t dlen = strlen(dir);
+    size_t nlen = strlen(name);
+    bool slash = dlen > 0 && dir[dlen - 1] == '/';
+    char *out = malloc(dlen + (slash ? 0 : 1) + nlen + 1);
+
+    if (!out) {
+        die("out of memory");
+    }
+    memcpy(out, dir, dlen);
+    if (!slash) {
+        out[dlen++] = '/';
+    }
+    memcpy(out + dlen, name, nlen);
+    out[dlen + nlen] = '\0';
+    return out;
+}
+
+static char *keyframe_source_name(int source_line) {
+    char name[128];
+    snprintf(name, sizeof(name), "frame_%03d_source_line_%03d.png", source_line, source_line);
+    return xstrdup(name);
+}
+
+static char *expanded_keyframe_name(int global_index, int source_line) {
+    char name[160];
+    snprintf(name, sizeof(name), "frame_%06d_source_line_%03d_part_01_keyframe.png",
+             global_index, source_line);
+    return xstrdup(name);
+}
+
+static char *expanded_additional_name(int global_index, int source_line, int part) {
+    char name[160];
+    snprintf(name, sizeof(name), "frame_%06d_source_line_%03d_part_%02d.png",
+             global_index, source_line, part);
+    return xstrdup(name);
+}
+
+static char *json_key_pattern(const char *key) {
+    size_t len = strlen(key);
+    char *pattern = malloc(len + 3);
+
+    if (!pattern) {
+        die("out of memory");
+    }
+    pattern[0] = '"';
+    memcpy(pattern + 1, key, len);
+    pattern[len + 1] = '"';
+    pattern[len + 2] = '\0';
+    return pattern;
+}
+
+static const char *json_field_value(const char *object, const char *key) {
+    char *pattern = json_key_pattern(key);
+    const char *hit = strstr(object, pattern);
+    const char *colon;
+
+    free(pattern);
+    if (!hit) {
+        return NULL;
+    }
+    colon = strchr(hit, ':');
+    if (!colon) {
+        return NULL;
+    }
+    return skip_ws(colon + 1);
+}
+
+static char *json_extract_string(const char *object, const char *key) {
+    const char *p = json_field_value(object, key);
+    char *out;
+    size_t cap = 128;
+    size_t len = 0;
+
+    if (!p || *p != '"') {
+        return xstrdup("");
+    }
+    p++;
+    out = malloc(cap);
+    if (!out) {
+        die("out of memory");
+    }
+
+    while (*p && *p != '"') {
+        char c = *p++;
+        if (c == '\\') {
+            c = *p++;
+            switch (c) {
+                case '"': c = '"'; break;
+                case '\\': c = '\\'; break;
+                case '/': c = '/'; break;
+                case 'b': c = '\b'; break;
+                case 'f': c = '\f'; break;
+                case 'n': c = '\n'; break;
+                case 'r': c = '\r'; break;
+                case 't': c = '\t'; break;
+                case 'u':
+                    if (isxdigit((unsigned char)p[0]) && isxdigit((unsigned char)p[1]) &&
+                        isxdigit((unsigned char)p[2]) && isxdigit((unsigned char)p[3])) {
+                        p += 4;
+                    }
+                    c = '?';
+                    break;
+                default:
+                    break;
+            }
+        }
+        if (len + 2 > cap) {
+            cap *= 2;
+            out = xrealloc(out, cap);
+        }
+        out[len++] = c;
+    }
+    out[len] = '\0';
+    return out;
+}
+
+static int json_extract_int(const char *object, const char *key, int fallback) {
+    const char *p = json_field_value(object, key);
+    char *end = NULL;
+    long value;
+
+    if (!p) {
+        return fallback;
+    }
+    errno = 0;
+    value = strtol(p, &end, 10);
+    if (errno != 0 || end == p) {
+        return fallback;
+    }
+    return (int)value;
+}
+
+static double json_extract_double(const char *object, const char *key, double fallback) {
+    const char *p = json_field_value(object, key);
+    char *end = NULL;
+    double value;
+
+    if (!p) {
+        return fallback;
+    }
+    errno = 0;
+    value = strtod(p, &end);
+    if (errno != 0 || end == p) {
+        return fallback;
+    }
+    return value;
+}
+
+static int word_count(const char *text) {
+    int count = 0;
+    bool in_word = false;
+
+    for (; *text; text++) {
+        if (isspace((unsigned char)*text)) {
+            in_word = false;
+        } else if (!in_word) {
+            count++;
+            in_word = true;
+        }
+    }
+    return count;
+}
+
+static int ceil_div_duration(double duration, double divisor) {
+    int whole = (int)(duration / divisor);
+    double exact = (double)whole * divisor;
+
+    if (duration > exact + 0.000001) {
+        whole++;
+    }
+    return whole;
+}
+
+static int expanded_additional_count(double duration, const char *spoken_text) {
+    int by_duration = ceil_div_duration(duration, 7.0);
+    int words = word_count(spoken_text);
+    int by_words = (words + 44) / 45;
+    int value = by_duration > by_words ? by_duration : by_words;
+
+    if (value < 6) {
+        value = 6;
+    }
+    if (value > 20) {
+        value = 20;
+    }
+    return value;
+}
+
+static void segment_info_free(SegmentInfo *segment) {
+    free(segment->object_json);
+    free(segment->speaker);
+    free(segment->source_text);
+    free(segment->spoken_text);
+}
+
+static void segment_list_add(SegmentInfoList *list, const char *start, size_t len, int fallback_index) {
+    SegmentInfo *segment;
+
+    if (list->count == list->cap) {
+        list->cap = list->cap ? list->cap * 2 : 64;
+        list->items = xrealloc(list->items, list->cap * sizeof(*list->items));
+    }
+    segment = &list->items[list->count++];
+    memset(segment, 0, sizeof(*segment));
+    segment->object_json = slice(start, len);
+    segment->segment_index = json_extract_int(segment->object_json, "segment_index", fallback_index);
+    segment->source_line = json_extract_int(segment->object_json, "source_line", segment->segment_index);
+    segment->start_seconds = json_extract_double(segment->object_json, "start_seconds", 0.0);
+    segment->end_seconds = json_extract_double(segment->object_json, "end_seconds", 0.0);
+    segment->segment_duration_seconds =
+        json_extract_double(segment->object_json, "segment_duration_seconds",
+                            segment->end_seconds - segment->start_seconds);
+    segment->speaker = json_extract_string(segment->object_json, "speaker");
+    segment->source_text = json_extract_string(segment->object_json, "source_text");
+    segment->spoken_text = json_extract_string(segment->object_json, "spoken_text");
+    segment->additional_frame_count =
+        expanded_additional_count(segment->segment_duration_seconds, segment->spoken_text);
+    segment->planned_frame_count = segment->additional_frame_count + 1;
+}
+
+static void segment_list_free(SegmentInfoList *list) {
+    for (size_t i = 0; i < list->count; i++) {
+        segment_info_free(&list->items[i]);
+    }
+    free(list->items);
+    free(list->prefix_before_segments);
+    free(list->suffix_from_segments_close);
+}
+
+static int parse_segments_json(const char *json_path, SegmentInfoList *list) {
+    char *json = read_text_file(json_path);
+    char *segments_key = strstr(json, "\"segments\"");
+    char *array_start;
+    char *p;
+    int depth = 0;
+    bool in_string = false;
+    bool escaped = false;
+    int object_depth = 0;
+    char *object_start = NULL;
+    int index = 0;
+
+    if (!segments_key) {
+        fprintf(stderr, "foc_prepare: no segments array in %s\n", json_path);
+        free(json);
+        return 1;
+    }
+    array_start = strchr(segments_key, '[');
+    if (!array_start) {
+        fprintf(stderr, "foc_prepare: malformed segments array in %s\n", json_path);
+        free(json);
+        return 1;
+    }
+
+    list->prefix_before_segments = slice(json, (size_t)(segments_key - json));
+    p = array_start + 1;
+
+    for (; *p; p++) {
+        char c = *p;
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if (c == '"') {
+            in_string = true;
+            continue;
+        }
+        if (c == '{') {
+            if (object_depth == 0) {
+                object_start = p;
+            }
+            object_depth++;
+            continue;
+        }
+        if (c == '}') {
+            object_depth--;
+            if (object_depth == 0 && object_start) {
+                index++;
+                segment_list_add(list, object_start, (size_t)(p - object_start + 1), index);
+                object_start = NULL;
+            }
+            continue;
+        }
+        if (c == '[') {
+            depth++;
+            continue;
+        }
+        if (c == ']') {
+            if (depth == 0 && object_depth == 0) {
+                list->suffix_from_segments_close = xstrdup(p);
+                free(json);
+                return 0;
+            }
+            depth--;
+        }
+    }
+
+    fprintf(stderr, "foc_prepare: unterminated segments array in %s\n", json_path);
+    free(json);
+    return 1;
+}
+
+static void compute_expanded_indices(SegmentInfoList *segments) {
+    int global = 0;
+
+    for (size_t i = 0; i < segments->count; i++) {
+        SegmentInfo *segment = &segments->items[i];
+        segment->expanded_frame_start_index = global + 1;
+        global += segment->planned_frame_count;
+        segment->expanded_frame_end_index = global;
+    }
+}
+
+static int sum_additional_frames(const SegmentInfoList *segments) {
+    int sum = 0;
+
+    for (size_t i = 0; i < segments->count; i++) {
+        sum += segments->items[i].additional_frame_count;
+    }
+    return sum;
+}
+
+static int sum_planned_frames(const SegmentInfoList *segments) {
+    int sum = 0;
+
+    for (size_t i = 0; i < segments->count; i++) {
+        sum += segments->items[i].planned_frame_count;
+    }
+    return sum;
+}
+
+static void read_character_png_names(const char *characters_dir, NameList *names) {
+    DIR *dir = opendir(characters_dir);
+
+    if (!dir) {
+        return;
+    }
+    for (;;) {
+        struct dirent *ent = readdir(dir);
+        char *name;
+        size_t len;
+
+        if (!ent) {
+            break;
+        }
+        if (!ends_with(ent->d_name, ".png")) {
+            continue;
+        }
+        len = strlen(ent->d_name) - 4;
+        name = slice(ent->d_name, len);
+        namelist_add(names, name);
+        free(name);
+    }
+    closedir(dir);
+}
+
+static bool segment_mentions_character(const SegmentInfo *segment, const char *name) {
+    return strcmp(segment->speaker, name) == 0 ||
+           contains_name(segment->source_text, name) ||
+           contains_name(segment->spoken_text, name);
+}
+
+static void write_relative_path(FILE *out, const char *dir, const char *name) {
+    char *path = join_path(dir, name);
+    json_string(out, path);
+    free(path);
+}
+
+static void write_character_objects(FILE *out, const SegmentInfo *segment,
+                                    const NameList *character_names,
+                                    const char *characters_dir) {
+    bool first = true;
+
+    fputs("[", out);
+    for (size_t i = 0; i < character_names->count; i++) {
+        const char *name = character_names->items[i];
+        char *png_name;
+        char *path;
+
+        if (!segment_mentions_character(segment, name)) {
+            continue;
+        }
+        png_name = malloc(strlen(name) + 5);
+        if (!png_name) {
+            die("out of memory");
+        }
+        sprintf(png_name, "%s.png", name);
+        path = join_path(characters_dir, png_name);
+        free(png_name);
+        if (!file_exists(path)) {
+            free(path);
+            continue;
+        }
+        if (!first) {
+            fputs(", ", out);
+        }
+        fputs("{\"name\": ", out);
+        json_string(out, name);
+        fputs(", \"image\": ", out);
+        json_string(out, path);
+        fputs("}", out);
+        first = false;
+        free(path);
+    }
+    fputs("]", out);
+}
+
+static void write_render_frames(FILE *out, const SegmentInfo *segment,
+                                const char *keyframes_dir, const char *expanded_dir) {
+    double step = segment->segment_duration_seconds / (double)segment->planned_frame_count;
+
+    fputs("[\n", out);
+    for (int part = 1; part <= segment->planned_frame_count; part++) {
+        int global = segment->expanded_frame_start_index + part - 1;
+        double frame_start = segment->start_seconds + step * (double)(part - 1);
+        double frame_end = segment->start_seconds + step * (double)part;
+
+        fputs("        {\n", out);
+        fprintf(out, "          \"global_frame_index\": %d,\n", global);
+        fprintf(out, "          \"source_line\": %d,\n", segment->source_line);
+        fprintf(out, "          \"segment_frame_index\": %d,\n", part);
+        if (part == 1) {
+            char *original = keyframe_source_name(segment->source_line);
+            char *expanded = expanded_keyframe_name(global, segment->source_line);
+            fputs("          \"frame_role\": \"existing_keyframe\",\n", out);
+            fputs("          \"original_frame_filename\": ", out);
+            write_relative_path(out, keyframes_dir, original);
+            fputs(",\n          \"frame_filename\": ", out);
+            write_relative_path(out, expanded_dir, expanded);
+            fputs(",\n          \"status\": \"generated\",\n", out);
+            free(original);
+            free(expanded);
+        } else {
+            char *expanded = expanded_additional_name(global, segment->source_line, part);
+            fputs("          \"frame_role\": \"additional_render\",\n", out);
+            fputs("          \"frame_filename\": ", out);
+            write_relative_path(out, expanded_dir, expanded);
+            fputs(",\n          \"status\": \"pending\",\n", out);
+            free(expanded);
+        }
+        fprintf(out, "          \"start_seconds\": %.6f,\n", frame_start);
+        fprintf(out, "          \"end_seconds\": %.6f,\n", frame_end);
+        fprintf(out, "          \"duration_seconds\": %.6f,\n", step);
+        fprintf(out, "          \"position_in_segment\": %.6f\n",
+                segment->planned_frame_count == 1 ? 0.0 :
+                (double)(part - 1) / (double)(segment->planned_frame_count - 1));
+        fprintf(out, "        }%s\n", part == segment->planned_frame_count ? "" : ",");
+    }
+    fputs("      ]", out);
+}
+
+static void write_expanded_references(FILE *out, const SegmentInfoList *segments,
+                                      size_t index, const NameList *character_names,
+                                      const char *keyframes_dir,
+                                      const char *characters_dir,
+                                      const char *expanded_dir) {
+    const SegmentInfo *segment = &segments->items[index];
+    char *current_original = keyframe_source_name(segment->source_line);
+    char *current_expanded = expanded_keyframe_name(segment->expanded_frame_start_index,
+                                                   segment->source_line);
+
+    fputs("{\n", out);
+    fputs("        \"previous_keyframe\": ", out);
+    if (index == 0) {
+        fputs("null", out);
+    } else {
+        const SegmentInfo *prev = &segments->items[index - 1];
+        char *name = expanded_keyframe_name(prev->expanded_frame_start_index, prev->source_line);
+        write_relative_path(out, expanded_dir, name);
+        free(name);
+    }
+    fputs(",\n        \"current_keyframe\": ", out);
+    write_relative_path(out, expanded_dir, current_expanded);
+    fputs(",\n        \"next_keyframe\": ", out);
+    if (index + 1 >= segments->count) {
+        fputs("null", out);
+    } else {
+        const SegmentInfo *next = &segments->items[index + 1];
+        char *name = expanded_keyframe_name(next->expanded_frame_start_index, next->source_line);
+        write_relative_path(out, expanded_dir, name);
+        free(name);
+    }
+    fputs(",\n        \"original_previous_keyframe\": ", out);
+    if (index == 0) {
+        fputs("null", out);
+    } else {
+        char *name = keyframe_source_name(segments->items[index - 1].source_line);
+        write_relative_path(out, keyframes_dir, name);
+        free(name);
+    }
+    fputs(",\n        \"original_current_keyframe\": ", out);
+    write_relative_path(out, keyframes_dir, current_original);
+    fputs(",\n        \"original_next_keyframe\": ", out);
+    if (index + 1 >= segments->count) {
+        fputs("null", out);
+    } else {
+        char *name = keyframe_source_name(segments->items[index + 1].source_line);
+        write_relative_path(out, keyframes_dir, name);
+        free(name);
+    }
+    fputs(",\n        \"characters\": ", out);
+    write_character_objects(out, segment, character_names, characters_dir);
+    fputs("\n      }", out);
+
+    free(current_original);
+    free(current_expanded);
+}
+
+static int write_expanded_json(const char *input_json, const char *keyframes_dir,
+                               const char *characters_dir, const char *expanded_dir,
+                               const char *out_json) {
+    SegmentInfoList segments = {0};
+    NameList character_names = {0};
+    FILE *out;
+    int additional_total;
+    int planned_total;
+
+    if (parse_segments_json(input_json, &segments) != 0) {
+        segment_list_free(&segments);
+        return 1;
+    }
+    compute_expanded_indices(&segments);
+    additional_total = sum_additional_frames(&segments);
+    planned_total = sum_planned_frames(&segments);
+    read_character_png_names(characters_dir, &character_names);
+
+    out = fopen(out_json, "w");
+    if (!out) {
+        fprintf(stderr, "foc_prepare: cannot write %s: %s\n", out_json, strerror(errno));
+        namelist_free(&character_names);
+        segment_list_free(&segments);
+        return 1;
+    }
+
+    fputs(segments.prefix_before_segments, out);
+    fprintf(out, "\"expanded_frame_count\": %d,\n", planned_total);
+    fprintf(out, "  \"additional_frame_count\": %d,\n", additional_total);
+    fputs("  \"render_expansion\": {\n", out);
+    fputs("    \"version\": 1,\n", out);
+    fputs("    \"purpose\": \"Plan 6 to 20 additional generated PNG frames for each foc_script.txt line while preserving the original audio segment timing.\",\n", out);
+    fputs("    \"frame_size\": {\"width\": 1920, \"height\": 1080},\n", out);
+    fprintf(out, "    \"source_segment_count\": %zu,\n", segments.count);
+    fprintf(out, "    \"existing_keyframe_count\": %zu,\n", segments.count);
+    fputs("    \"min_additional_frames_per_segment\": 6,\n", out);
+    fputs("    \"max_additional_frames_per_segment\": 20,\n", out);
+    fprintf(out, "    \"additional_frame_count\": %d,\n", additional_total);
+    fprintf(out, "    \"planned_frame_count_including_keyframes\": %d,\n", planned_total);
+    fprintf(out, "    \"original_keyframes_dir\": ");
+    json_string(out, keyframes_dir);
+    fputs(",\n    \"expanded_frames_dir\": ", out);
+    json_string(out, expanded_dir);
+    fputs(",\n    \"renumbered_keyframe_count\": ", out);
+    fprintf(out, "%zu,\n", segments.count);
+    fputs("    \"renumbered_keyframe_filename_pattern\": \"foc_script expanded PNGs/frame_%06d_source_line_%03d_part_01_keyframe.png\",\n", out);
+    fputs("    \"additional_frame_filename_pattern\": \"foc_script expanded PNGs/frame_%06d_source_line_%03d_part_%02d.png\",\n", out);
+    fputs("    \"count_selection\": \"additional_frame_count = clamp(max(ceil(segment_duration_seconds / 7), ceil(word_count / 45)), 6, 20)\",\n", out);
+    fputs("    \"timing\": \"Each segment duration is divided evenly across the existing keyframe plus its additional planned frames.\",\n", out);
+    fputs("    \"renumbering_note\": \"Existing keyframe PNGs should be copied into the expanded PNG folder at their global planned frame indices. The six-digit frame number is the new timeline location; source_line preserves the original script/keyframe number; missing numbered PNGs are pending additional renders.\",\n", out);
+    fputs("    \"continuity_guidance\": \"Use previous/current/next keyframes and listed character PNGs as references; keep camera, props, and characters coherent within each source line and across adjacent lines.\"\n", out);
+    fputs("  },\n  \"segments\": [\n", out);
+
+    for (size_t i = 0; i < segments.count; i++) {
+        SegmentInfo *segment = &segments.items[i];
+        char *original_name = keyframe_source_name(segment->source_line);
+        char *expanded_name = expanded_keyframe_name(segment->expanded_frame_start_index,
+                                                     segment->source_line);
+        char *close = strrchr(segment->object_json, '}');
+        size_t prefix_len = close ? (size_t)(close - segment->object_json) : strlen(segment->object_json);
+
+        fwrite(segment->object_json, 1, prefix_len, out);
+        fputs(",\n      \"original_keyframe_filename\": ", out);
+        write_relative_path(out, keyframes_dir, original_name);
+        fputs(",\n      \"keyframe_filename\": ", out);
+        write_relative_path(out, expanded_dir, expanded_name);
+        fputs(",\n      \"keyframe_status\": \"generated\",\n", out);
+        fprintf(out, "      \"additional_frame_count\": %d,\n", segment->additional_frame_count);
+        fprintf(out, "      \"planned_frame_count\": %d,\n", segment->planned_frame_count);
+        fprintf(out, "      \"expanded_frame_start_index\": %d,\n", segment->expanded_frame_start_index);
+        fprintf(out, "      \"expanded_frame_end_index\": %d,\n", segment->expanded_frame_end_index);
+        fputs("      \"render_references\": ", out);
+        write_expanded_references(out, &segments, i, &character_names,
+                                  keyframes_dir, characters_dir, expanded_dir);
+        fputs(",\n      \"render_frames\": ", out);
+        write_render_frames(out, segment, keyframes_dir, expanded_dir);
+        fprintf(out, "\n    }%s\n", i + 1 == segments.count ? "" : ",");
+
+        free(original_name);
+        free(expanded_name);
+    }
+
+    fputs(segments.suffix_from_segments_close, out);
+    fclose(out);
+
+    printf("segments=%zu\n", segments.count);
+    printf("additional_frame_count=%d\n", additional_total);
+    printf("planned_frame_count_including_keyframes=%d\n", planned_total);
+    printf("expanded_json=%s\n", out_json);
+
+    namelist_free(&character_names);
+    segment_list_free(&segments);
+    return 0;
+}
+
+static int ensure_directory(const char *path) {
+    if (dir_exists(path)) {
+        return 0;
+    }
+    if (mkdir(path, 0755) == 0) {
+        return 0;
+    }
+    if (errno == EEXIST && dir_exists(path)) {
+        return 0;
+    }
+    fprintf(stderr, "foc_prepare: cannot create directory %s: %s\n", path, strerror(errno));
+    return 1;
+}
+
+static int copy_file_binary(const char *src, const char *dst) {
+    FILE *in = fopen(src, "rb");
+    FILE *out;
+    unsigned char buf[65536];
+
+    if (!in) {
+        fprintf(stderr, "foc_prepare: cannot open %s: %s\n", src, strerror(errno));
+        return 1;
+    }
+    out = fopen(dst, "wb");
+    if (!out) {
+        fprintf(stderr, "foc_prepare: cannot write %s: %s\n", dst, strerror(errno));
+        fclose(in);
+        return 1;
+    }
+    for (;;) {
+        size_t nread = fread(buf, 1, sizeof(buf), in);
+        if (nread > 0 && fwrite(buf, 1, nread, out) != nread) {
+            fprintf(stderr, "foc_prepare: write failed for %s\n", dst);
+            fclose(in);
+            fclose(out);
+            return 1;
+        }
+        if (nread < sizeof(buf)) {
+            if (ferror(in)) {
+                fprintf(stderr, "foc_prepare: read failed for %s\n", src);
+                fclose(in);
+                fclose(out);
+                return 1;
+            }
+            break;
+        }
+    }
+    if (fclose(in) != 0 || fclose(out) != 0) {
+        fprintf(stderr, "foc_prepare: close failed while copying %s\n", src);
+        return 1;
+    }
+    return 0;
+}
+
+static int renumber_keyframes(const char *input_json, const char *keyframes_dir,
+                              const char *expanded_dir) {
+    SegmentInfoList segments = {0};
+    int copied = 0;
+    int missing = 0;
+
+    if (parse_segments_json(input_json, &segments) != 0) {
+        segment_list_free(&segments);
+        return 1;
+    }
+    compute_expanded_indices(&segments);
+    if (ensure_directory(expanded_dir) != 0) {
+        segment_list_free(&segments);
+        return 1;
+    }
+
+    for (size_t i = 0; i < segments.count; i++) {
+        SegmentInfo *segment = &segments.items[i];
+        char *src_name = keyframe_source_name(segment->source_line);
+        char *dst_name = expanded_keyframe_name(segment->expanded_frame_start_index,
+                                                segment->source_line);
+        char *src = join_path(keyframes_dir, src_name);
+        char *dst = join_path(expanded_dir, dst_name);
+
+        if (!file_exists(src)) {
+            printf("missing_keyframe\t%d\t%s\n", segment->source_line, src);
+            missing++;
+        } else if (copy_file_binary(src, dst) == 0) {
+            copied++;
+        } else {
+            missing++;
+        }
+
+        free(src_name);
+        free(dst_name);
+        free(src);
+        free(dst);
+    }
+
+    printf("segments=%zu\n", segments.count);
+    printf("copied_keyframes=%d\n", copied);
+    printf("missing_keyframes=%d\n", missing);
+    printf("expanded_dir=%s\n", expanded_dir);
+
+    segment_list_free(&segments);
+    return missing ? 1 : 0;
+}
+
 static void usage(FILE *out) {
     fputs("usage:\n", out);
     fputs("  foc_prepare characters <foc_script.txt> <foc_characters.txt>\n", out);
@@ -919,6 +1697,8 @@ static void usage(FILE *out) {
     fputs("  foc_prepare concat <frames_dir> <frame_count> <duration_seconds> <out.ffconcat>\n", out);
     fputs("  foc_prepare prompt-plan <foc_script.txt> <foc_characters_dir> <frames_dir> <out.jsonl>\n", out);
     fputs("  foc_prepare verify-characters <foc_characters.txt> <foc_characters_dir>\n", out);
+    fputs("  foc_prepare expand-json <base_foc_script.json> <keyframes_dir> <foc_characters_dir> <expanded_frames_dir> <out_foc_script.json>\n", out);
+    fputs("  foc_prepare renumber-keyframes <base_foc_script.json> <keyframes_dir> <expanded_frames_dir>\n", out);
 }
 
 int main(int argc, char **argv) {
@@ -992,6 +1772,22 @@ int main(int argc, char **argv) {
             return 1;
         }
         return verify_characters(argv[2], argv[3]);
+    }
+
+    if (strcmp(argv[1], "expand-json") == 0) {
+        if (argc != 7) {
+            usage(stderr);
+            return 1;
+        }
+        return write_expanded_json(argv[2], argv[3], argv[4], argv[5], argv[6]);
+    }
+
+    if (strcmp(argv[1], "renumber-keyframes") == 0) {
+        if (argc != 5) {
+            usage(stderr);
+            return 1;
+        }
+        return renumber_keyframes(argv[2], argv[3], argv[4]);
     }
 
     usage(stderr);
