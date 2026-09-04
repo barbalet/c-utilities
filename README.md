@@ -59,8 +59,8 @@ The PNG render utility source was refreshed from the fuller local
 `leicester_ymca/jackson` copy, which includes expanded-frame materialization via
 `fill-expanded-copies`.
 
-The PNG render folder also now includes `foc_imagegen` from the local
-`azaz/trainingdata/movetoazaz` copy. Its Makefile builds both:
+The PNG render folder also now includes the `foc_imagegen` source from the local
+`azaz/trainingdata/movetoazaz` copy. Its Makefile builds both PNG render tools:
 
 ```sh
 cd "png render utils"
@@ -97,7 +97,9 @@ The repo is intentionally kept small.
 - No copied file is larger than 30 MB.
 - No copied directory is larger than 30 MB.
 - Object files are ignored with `*.o`.
-- Existing tracked object artifacts were removed from this checkout.
+- Generated executable binaries are ignored by name.
+- Existing tracked object artifacts and executable binaries were removed from
+  this checkout.
 
-The repository still contains some small prebuilt executable utilities where
-they were already part of the current or copied local utility sets.
+The committed tree should contain source, documentation, and build recipes only.
+Run the Makefiles locally whenever the utilities need to be rebuilt.
