@@ -1416,11 +1416,13 @@ static void write_render_frames(FILE *out, const SegmentInfo *segment,
             free(expanded);
         } else {
             char *expanded = expanded_additional_name(global, segment->source_line, part);
+            char *target = join_path(expanded_dir, expanded);
             fputs("          \"frame_role\": \"additional_render\",\n", out);
             fputs("          \"frame_filename\": ", out);
             write_relative_path(out, expanded_dir, expanded);
-            fputs(",\n          \"status\": \"pending\",\n", out);
+            fprintf(out, ",\n          \"status\": \"%s\",\n", file_exists(target) ? "generated" : "pending");
             free(expanded);
+            free(target);
         }
         fprintf(out, "          \"start_seconds\": %.6f,\n", frame_start);
         fprintf(out, "          \"end_seconds\": %.6f,\n", frame_end);
@@ -1687,6 +1689,75 @@ static int renumber_keyframes(const char *input_json, const char *keyframes_dir,
     return missing ? 1 : 0;
 }
 
+static int fill_expanded_copies(const char *input_json, const char *keyframes_dir,
+                                const char *expanded_dir) {
+    SegmentInfoList segments = {0};
+    int copied_keyframes = 0;
+    int copied_additional = 0;
+    int skipped_existing = 0;
+    int missing_sources = 0;
+
+    if (parse_segments_json(input_json, &segments) != 0) {
+        segment_list_free(&segments);
+        return 1;
+    }
+    compute_expanded_indices(&segments);
+    if (ensure_directory(expanded_dir) != 0) {
+        segment_list_free(&segments);
+        return 1;
+    }
+
+    for (size_t i = 0; i < segments.count; i++) {
+        SegmentInfo *segment = &segments.items[i];
+        char *src_name = keyframe_source_name(segment->source_line);
+        char *src = join_path(keyframes_dir, src_name);
+
+        if (!file_exists(src)) {
+            printf("missing_keyframe_source\t%d\t%s\n", segment->source_line, src);
+            missing_sources++;
+            free(src_name);
+            free(src);
+            continue;
+        }
+
+        for (int part = 1; part <= segment->planned_frame_count; part++) {
+            int global = segment->expanded_frame_start_index + part - 1;
+            char *dst_name = part == 1 ?
+                expanded_keyframe_name(global, segment->source_line) :
+                expanded_additional_name(global, segment->source_line, part);
+            char *dst = join_path(expanded_dir, dst_name);
+
+            if (file_exists(dst)) {
+                skipped_existing++;
+            } else if (copy_file_binary(src, dst) == 0) {
+                if (part == 1) {
+                    copied_keyframes++;
+                } else {
+                    copied_additional++;
+                }
+            } else {
+                missing_sources++;
+            }
+
+            free(dst_name);
+            free(dst);
+        }
+
+        free(src_name);
+        free(src);
+    }
+
+    printf("segments=%zu\n", segments.count);
+    printf("copied_keyframes=%d\n", copied_keyframes);
+    printf("copied_additional=%d\n", copied_additional);
+    printf("skipped_existing=%d\n", skipped_existing);
+    printf("missing_sources=%d\n", missing_sources);
+    printf("expanded_dir=%s\n", expanded_dir);
+
+    segment_list_free(&segments);
+    return missing_sources ? 1 : 0;
+}
+
 static void usage(FILE *out) {
     fputs("usage:\n", out);
     fputs("  foc_prepare characters <foc_script.txt> <foc_characters.txt>\n", out);
@@ -1699,6 +1770,7 @@ static void usage(FILE *out) {
     fputs("  foc_prepare verify-characters <foc_characters.txt> <foc_characters_dir>\n", out);
     fputs("  foc_prepare expand-json <base_foc_script.json> <keyframes_dir> <foc_characters_dir> <expanded_frames_dir> <out_foc_script.json>\n", out);
     fputs("  foc_prepare renumber-keyframes <base_foc_script.json> <keyframes_dir> <expanded_frames_dir>\n", out);
+    fputs("  foc_prepare fill-expanded-copies <base_foc_script.json> <keyframes_dir> <expanded_frames_dir>\n", out);
 }
 
 int main(int argc, char **argv) {
@@ -1788,6 +1860,14 @@ int main(int argc, char **argv) {
             return 1;
         }
         return renumber_keyframes(argv[2], argv[3], argv[4]);
+    }
+
+    if (strcmp(argv[1], "fill-expanded-copies") == 0) {
+        if (argc != 5) {
+            usage(stderr);
+            return 1;
+        }
+        return fill_expanded_copies(argv[2], argv[3], argv[4]);
     }
 
     usage(stderr);

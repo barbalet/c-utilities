@@ -1,0 +1,103 @@
+# C Utilities
+
+Native C utility programs for Codex-adjacent media, render, and Field of Chaos
+workflows.
+
+The repository is organized by workflow domain:
+
+- `audio/`: Field of Chaos text and audio pipeline helpers
+- `png render utils/`: Field of Chaos PNG render planning and verification
+- `aa_render_c/`: native AA rendering orchestration
+- `bob media utils/`: Bob media preparation utilities copied from the local
+  Jackson snapshot
+
+## Latest GitHub State
+
+The latest public GitHub version checked for this work is:
+
+- Repository: `barbalet/c-utilities`
+- URL: <https://github.com/barbalet/c-utilities>
+- Branch: `main`
+- Commit: `fcaeff4b75c9c3a67bcf1e058d02b4a0cca8233d`
+- Commit date: 2026-09-04 20:27:31 UTC
+- Commit message: `Add aa rendering method`
+
+The recent commit history shows the current direction of the repo:
+
+- `fcaeff4`: add the native AA rendering method
+- `6c28e92`: update utilities
+- `d9a2cad`: update README content
+- `6e82593`: update the audio side
+- `aebf8b7`: optimize the audio C path
+- `41cf089`: update audio rendering
+- `addcf9c`: add PNG rendering work
+- `33c3c3b`: add new utilities
+- `597ba6c`: update new utilities
+- `d15cb61`: update utilities from the use path
+- `6f91282`: initial commit
+
+That history is why this checkout keeps the existing workflow-oriented layout
+instead of flattening every utility into one source directory.
+
+## Local `c-utilities` Directories Found
+
+The scoped search found these local directories named `c-utilities`:
+
+- `/Users/barbalet/next/github/next/c-utilities`
+- `/Users/barbalet/next/github/next/azaz/trainingdata/movetoazaz/tools/c-utilities`
+- `/Users/barbalet/next/github/next/leicester_ymca/jackson/c-utilities`
+- `/Users/barbalet/Documents/ChatGPT/jackson/c-utilities`
+- `/Users/barbalet/Documents/ChatGPT/jackson/quidjibo/tools/c-utilities`
+- `/Users/barbalet/Documents/ChatGPT/jackson/quidjibo/movetoazaz/tools/c-utilities`
+
+The target GitHub checkout is `/Users/barbalet/next/github/next/c-utilities`.
+It was already at the latest GitHub commit above before the current import.
+
+## What Was Added
+
+The PNG render utility source was refreshed from the fuller local
+`leicester_ymca/jackson` copy, which includes expanded-frame materialization via
+`fill-expanded-copies`.
+
+The PNG render folder also now includes `foc_imagegen` from the local
+`azaz/trainingdata/movetoazaz` copy. Its Makefile builds both:
+
+```sh
+cd "png render utils"
+make
+```
+
+The Bob media utilities from the local Jackson snapshot were added under:
+
+```text
+bob media utils/
+```
+
+## Build
+
+Build each workflow independently:
+
+```sh
+make -C audio
+make -C "png render utils"
+make -C "bob media utils"
+make -C aa_render_c -f Makefile.aa_render_c
+```
+
+The AA renderer Makefile also provides its own smoke-test target:
+
+```sh
+make -C aa_render_c -f Makefile.aa_render_c clean all test
+```
+
+## Size And Generated Files
+
+The repo is intentionally kept small.
+
+- No copied file is larger than 30 MB.
+- No copied directory is larger than 30 MB.
+- Object files are ignored with `*.o`.
+- Existing tracked object artifacts were removed from this checkout.
+
+The repository still contains some small prebuilt executable utilities where
+they were already part of the current or copied local utility sets.
