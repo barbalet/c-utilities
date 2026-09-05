@@ -8,6 +8,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "../common/cutil.h"
+
 typedef struct {
     char *name;
     char *tail;
@@ -47,67 +49,6 @@ static const char *known_mentions[] = {
     "23152",
     "23459",
 };
-
-static void die(const char *message) {
-    fprintf(stderr, "foc_prepare: %s\n", message);
-    exit(1);
-}
-
-static void *xrealloc(void *ptr, size_t size) {
-    void *next = realloc(ptr, size);
-    if (!next) {
-        die("out of memory");
-    }
-    return next;
-}
-
-static char *xstrdup(const char *s) {
-    char *copy = strdup(s);
-    if (!copy) {
-        die("out of memory");
-    }
-    return copy;
-}
-
-static void trim_inplace(char *s) {
-    size_t len;
-    char *start = s;
-
-    while (*start && isspace((unsigned char)*start)) {
-        start++;
-    }
-    if (start != s) {
-        memmove(s, start, strlen(start) + 1);
-    }
-
-    len = strlen(s);
-    while (len > 0 && isspace((unsigned char)s[len - 1])) {
-        s[--len] = '\0';
-    }
-}
-
-static void strip_newline(char *s) {
-    size_t len = strlen(s);
-    while (len > 0 && (s[len - 1] == '\n' || s[len - 1] == '\r')) {
-        s[--len] = '\0';
-    }
-}
-
-static bool file_exists(const char *path) {
-    struct stat st;
-    return stat(path, &st) == 0 && S_ISREG(st.st_mode);
-}
-
-static bool dir_exists(const char *path) {
-    struct stat st;
-    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
-}
-
-static bool ends_with(const char *s, const char *suffix) {
-    size_t slen = strlen(s);
-    size_t suffix_len = strlen(suffix);
-    return slen >= suffix_len && strcmp(s + slen - suffix_len, suffix) == 0;
-}
 
 static int parse_positive_int(const char *s, const char *label) {
     char *end = NULL;
@@ -155,8 +96,8 @@ static bool contains_name(const char *text, const char *name) {
 }
 
 static void namelist_add(NameList *list, const char *raw_name) {
-    char *name = xstrdup(raw_name);
-    trim_inplace(name);
+    char *name = cu_xstrdup(raw_name);
+    cu_trim_inplace(name);
     if (name[0] == '\0') {
         free(name);
         return;
@@ -171,7 +112,7 @@ static void namelist_add(NameList *list, const char *raw_name) {
 
     if (list->count == list->cap) {
         list->cap = list->cap ? list->cap * 2 : 32;
-        list->items = xrealloc(list->items, list->cap * sizeof(*list->items));
+        list->items = cu_xrealloc(list->items, list->cap * sizeof(*list->items));
     }
     list->items[list->count++] = name;
 }
@@ -196,10 +137,7 @@ static size_t speaker_sep_len(const char *sep) {
 }
 
 static char *slice(const char *start, size_t len) {
-    char *out = malloc(len + 1);
-    if (!out) {
-        die("out of memory");
-    }
+    char *out = cu_xmalloc(len + 1);
     memcpy(out, start, len);
     out[len] = '\0';
     return out;
@@ -210,28 +148,28 @@ static char *speaker_from_line(const char *line) {
     char *speaker;
 
     if (!sep) {
-        return xstrdup("");
+        return cu_xstrdup("");
     }
     speaker = slice(line, (size_t)(sep - line));
-    trim_inplace(speaker);
+    cu_trim_inplace(speaker);
     return speaker;
 }
 
 static char *text_from_line(const char *line) {
     const char *sep = find_speaker_sep(line);
     if (!sep) {
-        return xstrdup(line);
+        return cu_xstrdup(line);
     }
-    return xstrdup(sep + speaker_sep_len(sep));
+    return cu_xstrdup(sep + speaker_sep_len(sep));
 }
 
 static void existing_add(ExistingList *list, const char *name, const char *tail) {
     if (list->count == list->cap) {
         list->cap = list->cap ? list->cap * 2 : 32;
-        list->items = xrealloc(list->items, list->cap * sizeof(*list->items));
+        list->items = cu_xrealloc(list->items, list->cap * sizeof(*list->items));
     }
-    list->items[list->count].name = xstrdup(name);
-    list->items[list->count].tail = xstrdup(tail);
+    list->items[list->count].name = cu_xstrdup(name);
+    list->items[list->count].tail = cu_xstrdup(tail);
     list->count++;
 }
 
@@ -240,7 +178,7 @@ static void read_existing_characters(ExistingList *existing, const char *path) {
     char *line = NULL;
     size_t cap = 0;
 
-    if (!file_exists(path)) {
+    if (!cu_file_exists(path)) {
         return;
     }
 
@@ -252,8 +190,8 @@ static void read_existing_characters(ExistingList *existing, const char *path) {
     while (getline(&line, &cap, f) != -1) {
         char *comma;
         char *name;
-        strip_newline(line);
-        trim_inplace(line);
+        cu_strip_newline(line);
+        cu_trim_inplace(line);
         if (line[0] == '\0') {
             continue;
         }
@@ -261,7 +199,7 @@ static void read_existing_characters(ExistingList *existing, const char *path) {
         if (comma) {
             *comma = '\0';
             name = line;
-            trim_inplace(name);
+            cu_trim_inplace(name);
             existing_add(existing, name, comma + 1);
         } else {
             existing_add(existing, line, "");
@@ -310,7 +248,7 @@ static void collect_characters(const char *script_path, NameList *names) {
 
     while (getline(&line, &cap, f) != -1) {
         char *speaker;
-        strip_newline(line);
+        cu_strip_newline(line);
         if (line[0] == '\0') {
             continue;
         }
@@ -375,38 +313,7 @@ static int write_characters(const char *script_path, const char *out_path) {
 
 static void json_string(FILE *out, const char *s) {
     fputc('"', out);
-    for (; *s; s++) {
-        unsigned char c = (unsigned char)*s;
-        switch (c) {
-            case '\\':
-                fputs("\\\\", out);
-                break;
-            case '"':
-                fputs("\\\"", out);
-                break;
-            case '\b':
-                fputs("\\b", out);
-                break;
-            case '\f':
-                fputs("\\f", out);
-                break;
-            case '\n':
-                fputs("\\n", out);
-                break;
-            case '\r':
-                fputs("\\r", out);
-                break;
-            case '\t':
-                fputs("\\t", out);
-                break;
-            default:
-                if (c < 0x20) {
-                    fprintf(out, "\\u%04x", c);
-                } else {
-                    fputc(c, out);
-                }
-        }
-    }
+    cu_json_escape_write(out, s);
     fputc('"', out);
 }
 
@@ -434,7 +341,7 @@ static int count_lines(const char *script_path) {
     }
 
     while (getline(&line, &cap, f) != -1) {
-        strip_newline(line);
+        cu_strip_newline(line);
         if (line[0] != '\0') {
             count++;
         }
@@ -461,7 +368,7 @@ static int write_manifest(const char *script_path, const char *frames_dir, const
     for (int i = 1; i <= frame_count; i++) {
         char path[4096];
         frame_path(path, sizeof(path), frames_dir, i);
-        if (file_exists(path)) {
+        if (cu_file_exists(path)) {
             generated_count++;
         }
     }
@@ -489,14 +396,14 @@ static int write_manifest(const char *script_path, const char *frames_dir, const
         char *text;
         bool generated;
 
-        strip_newline(line);
+        cu_strip_newline(line);
         if (line[0] == '\0') {
             continue;
         }
 
         index++;
         frame_path(path, sizeof(path), frames_dir, index);
-        generated = file_exists(path);
+        generated = cu_file_exists(path);
         speaker = speaker_from_line(line);
         text = text_from_line(line);
 
@@ -567,7 +474,7 @@ static int print_status(const char *script_path, const char *frames_dir) {
         bool exists;
 
         frame_path(path, sizeof(path), frames_dir, i);
-        exists = file_exists(path);
+        exists = cu_file_exists(path);
         if (exists) {
             generated++;
             if (in_range) {
@@ -617,13 +524,13 @@ static int print_next_missing(const char *script_path, const char *frames_dir) {
         char *speaker;
         char *text;
 
-        strip_newline(line);
+        cu_strip_newline(line);
         if (line[0] == '\0') {
             continue;
         }
         index++;
         frame_path(path, sizeof(path), frames_dir, index);
-        if (file_exists(path)) {
+        if (cu_file_exists(path)) {
             continue;
         }
 
@@ -733,7 +640,7 @@ static void write_character_refs(FILE *out, const char *line, const char *speake
     fputc('[', out);
     if (speaker[0] != '\0') {
         character_path(path, sizeof(path), characters_dir, speaker);
-        if (file_exists(path)) {
+        if (cu_file_exists(path)) {
             json_string(out, path);
             first = false;
         }
@@ -744,7 +651,7 @@ static void write_character_refs(FILE *out, const char *line, const char *speake
             continue;
         }
         character_path(path, sizeof(path), characters_dir, known_mentions[i]);
-        if (!file_exists(path)) {
+        if (!cu_file_exists(path)) {
             continue;
         }
         if (!first) {
@@ -768,7 +675,7 @@ static int write_prompt_plan(const char *script_path, const char *characters_dir
         fprintf(stderr, "foc_prepare: cannot open %s: %s\n", script_path, strerror(errno));
         return 1;
     }
-    if (!dir_exists(characters_dir)) {
+    if (!cu_dir_exists(characters_dir)) {
         fprintf(stderr, "foc_prepare: cannot open character directory %s\n", characters_dir);
         fclose(script);
         return 1;
@@ -787,7 +694,7 @@ static int write_prompt_plan(const char *script_path, const char *characters_dir
         char *speaker;
         char *text;
 
-        strip_newline(line);
+        cu_strip_newline(line);
         if (line[0] == '\0') {
             continue;
         }
@@ -845,15 +752,15 @@ static int verify_characters(const char *characters_path, const char *characters
 
     while (getline(&line, &cap, f) != -1) {
         char *comma;
-        strip_newline(line);
-        trim_inplace(line);
+        cu_strip_newline(line);
+        cu_trim_inplace(line);
         if (line[0] == '\0') {
             continue;
         }
         comma = strchr(line, ',');
         if (comma) {
             *comma = '\0';
-            trim_inplace(line);
+            cu_trim_inplace(line);
         }
         namelist_add(&expected, line);
     }
@@ -875,7 +782,7 @@ static int verify_characters(const char *characters_path, const char *characters
         if (!ent) {
             break;
         }
-        if (!ends_with(ent->d_name, ".png")) {
+        if (!cu_ends_with(ent->d_name, ".png")) {
             continue;
         }
         len = strlen(ent->d_name) - 4;
@@ -888,7 +795,7 @@ static int verify_characters(const char *characters_path, const char *characters
     for (size_t i = 0; i < expected.count; i++) {
         char path[4096];
         character_path(path, sizeof(path), characters_dir, expected.items[i]);
-        if (!file_exists(path)) {
+        if (!cu_file_exists(path)) {
             printf("missing\t%s.png\n", expected.items[i]);
             missing++;
         }
@@ -934,40 +841,6 @@ typedef struct {
     char *suffix_from_segments_close;
 } SegmentInfoList;
 
-static char *read_text_file(const char *path) {
-    FILE *f = fopen(path, "rb");
-    long size;
-    char *buf;
-
-    if (!f) {
-        fprintf(stderr, "foc_prepare: cannot open %s: %s\n", path, strerror(errno));
-        exit(1);
-    }
-    if (fseek(f, 0, SEEK_END) != 0) {
-        fclose(f);
-        die("cannot seek input file");
-    }
-    size = ftell(f);
-    if (size < 0) {
-        fclose(f);
-        die("cannot measure input file");
-    }
-    rewind(f);
-    buf = malloc((size_t)size + 1);
-    if (!buf) {
-        fclose(f);
-        die("out of memory");
-    }
-    if (fread(buf, 1, (size_t)size, f) != (size_t)size) {
-        free(buf);
-        fclose(f);
-        die("cannot read input file");
-    }
-    buf[size] = '\0';
-    fclose(f);
-    return buf;
-}
-
 static const char *skip_ws(const char *p) {
     while (*p && isspace((unsigned char)*p)) {
         p++;
@@ -979,11 +852,7 @@ static char *join_path(const char *dir, const char *name) {
     size_t dlen = strlen(dir);
     size_t nlen = strlen(name);
     bool slash = dlen > 0 && dir[dlen - 1] == '/';
-    char *out = malloc(dlen + (slash ? 0 : 1) + nlen + 1);
-
-    if (!out) {
-        die("out of memory");
-    }
+    char *out = cu_xmalloc(dlen + (slash ? 0 : 1) + nlen + 1);
     memcpy(out, dir, dlen);
     if (!slash) {
         out[dlen++] = '/';
@@ -996,30 +865,26 @@ static char *join_path(const char *dir, const char *name) {
 static char *keyframe_source_name(int source_line) {
     char name[128];
     snprintf(name, sizeof(name), "frame_%03d_source_line_%03d.png", source_line, source_line);
-    return xstrdup(name);
+    return cu_xstrdup(name);
 }
 
 static char *expanded_keyframe_name(int global_index, int source_line) {
     char name[160];
     snprintf(name, sizeof(name), "frame_%06d_source_line_%03d_part_01_keyframe.png",
              global_index, source_line);
-    return xstrdup(name);
+    return cu_xstrdup(name);
 }
 
 static char *expanded_additional_name(int global_index, int source_line, int part) {
     char name[160];
     snprintf(name, sizeof(name), "frame_%06d_source_line_%03d_part_%02d.png",
              global_index, source_line, part);
-    return xstrdup(name);
+    return cu_xstrdup(name);
 }
 
 static char *json_key_pattern(const char *key) {
     size_t len = strlen(key);
-    char *pattern = malloc(len + 3);
-
-    if (!pattern) {
-        die("out of memory");
-    }
+    char *pattern = cu_xmalloc(len + 3);
     pattern[0] = '"';
     memcpy(pattern + 1, key, len);
     pattern[len + 1] = '"';
@@ -1050,13 +915,10 @@ static char *json_extract_string(const char *object, const char *key) {
     size_t len = 0;
 
     if (!p || *p != '"') {
-        return xstrdup("");
+        return cu_xstrdup("");
     }
     p++;
-    out = malloc(cap);
-    if (!out) {
-        die("out of memory");
-    }
+    out = cu_xmalloc(cap);
 
     while (*p && *p != '"') {
         char c = *p++;
@@ -1084,7 +946,7 @@ static char *json_extract_string(const char *object, const char *key) {
         }
         if (len + 2 > cap) {
             cap *= 2;
-            out = xrealloc(out, cap);
+            out = cu_xrealloc(out, cap);
         }
         out[len++] = c;
     }
@@ -1176,7 +1038,7 @@ static void segment_list_add(SegmentInfoList *list, const char *start, size_t le
 
     if (list->count == list->cap) {
         list->cap = list->cap ? list->cap * 2 : 64;
-        list->items = xrealloc(list->items, list->cap * sizeof(*list->items));
+        list->items = cu_xrealloc(list->items, list->cap * sizeof(*list->items));
     }
     segment = &list->items[list->count++];
     memset(segment, 0, sizeof(*segment));
@@ -1206,7 +1068,7 @@ static void segment_list_free(SegmentInfoList *list) {
 }
 
 static int parse_segments_json(const char *json_path, SegmentInfoList *list) {
-    char *json = read_text_file(json_path);
+    char *json = cu_read_text_file(json_path);
     char *segments_key = strstr(json, "\"segments\"");
     char *array_start;
     char *p;
@@ -1271,7 +1133,7 @@ static int parse_segments_json(const char *json_path, SegmentInfoList *list) {
         }
         if (c == ']') {
             if (depth == 0 && object_depth == 0) {
-                list->suffix_from_segments_close = xstrdup(p);
+                list->suffix_from_segments_close = cu_xstrdup(p);
                 free(json);
                 return 0;
             }
@@ -1327,7 +1189,7 @@ static void read_character_png_names(const char *characters_dir, NameList *names
         if (!ent) {
             break;
         }
-        if (!ends_with(ent->d_name, ".png")) {
+        if (!cu_ends_with(ent->d_name, ".png")) {
             continue;
         }
         len = strlen(ent->d_name) - 4;
@@ -1364,14 +1226,14 @@ static void write_character_objects(FILE *out, const SegmentInfo *segment,
         if (!segment_mentions_character(segment, name)) {
             continue;
         }
-        png_name = malloc(strlen(name) + 5);
+        png_name = cu_xmalloc(strlen(name) + 5);
         if (!png_name) {
-            die("out of memory");
+            cu_die("out of memory");
         }
         sprintf(png_name, "%s.png", name);
         path = join_path(characters_dir, png_name);
         free(png_name);
-        if (!file_exists(path)) {
+        if (!cu_file_exists(path)) {
             free(path);
             continue;
         }
@@ -1420,7 +1282,7 @@ static void write_render_frames(FILE *out, const SegmentInfo *segment,
             fputs("          \"frame_role\": \"additional_render\",\n", out);
             fputs("          \"frame_filename\": ", out);
             write_relative_path(out, expanded_dir, expanded);
-            fprintf(out, ",\n          \"status\": \"%s\",\n", file_exists(target) ? "generated" : "pending");
+            fprintf(out, ",\n          \"status\": \"%s\",\n", cu_file_exists(target) ? "generated" : "pending");
             free(expanded);
             free(target);
         }
@@ -1588,13 +1450,13 @@ static int write_expanded_json(const char *input_json, const char *keyframes_dir
 }
 
 static int ensure_directory(const char *path) {
-    if (dir_exists(path)) {
+    if (cu_dir_exists(path)) {
         return 0;
     }
     if (mkdir(path, 0755) == 0) {
         return 0;
     }
-    if (errno == EEXIST && dir_exists(path)) {
+    if (errno == EEXIST && cu_dir_exists(path)) {
         return 0;
     }
     fprintf(stderr, "foc_prepare: cannot create directory %s: %s\n", path, strerror(errno));
@@ -1665,7 +1527,7 @@ static int renumber_keyframes(const char *input_json, const char *keyframes_dir,
         char *src = join_path(keyframes_dir, src_name);
         char *dst = join_path(expanded_dir, dst_name);
 
-        if (!file_exists(src)) {
+        if (!cu_file_exists(src)) {
             printf("missing_keyframe\t%d\t%s\n", segment->source_line, src);
             missing++;
         } else if (copy_file_binary(src, dst) == 0) {
@@ -1712,7 +1574,7 @@ static int fill_expanded_copies(const char *input_json, const char *keyframes_di
         char *src_name = keyframe_source_name(segment->source_line);
         char *src = join_path(keyframes_dir, src_name);
 
-        if (!file_exists(src)) {
+        if (!cu_file_exists(src)) {
             printf("missing_keyframe_source\t%d\t%s\n", segment->source_line, src);
             missing_sources++;
             free(src_name);
@@ -1727,7 +1589,7 @@ static int fill_expanded_copies(const char *input_json, const char *keyframes_di
                 expanded_additional_name(global, segment->source_line, part);
             char *dst = join_path(expanded_dir, dst_name);
 
-            if (file_exists(dst)) {
+            if (cu_file_exists(dst)) {
                 skipped_existing++;
             } else if (copy_file_binary(src, dst) == 0) {
                 if (part == 1) {
@@ -1774,6 +1636,8 @@ static void usage(FILE *out) {
 }
 
 int main(int argc, char **argv) {
+    cu_set_program_name("foc_prepare");
+
     if (argc < 2 || strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
         usage(stdout);
         return argc < 2 ? 1 : 0;

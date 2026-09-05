@@ -9,44 +9,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-typedef struct {
-    char *data;
-    size_t len;
-} Buffer;
-
-static void die(const char *message) {
-    fprintf(stderr, "foc_imagegen: %s\n", message);
-    exit(1);
-}
-
-static void die_errno(const char *message) {
-    fprintf(stderr, "foc_imagegen: %s: %s\n", message, strerror(errno));
-    exit(1);
-}
-
-static void *xmalloc(size_t size) {
-    void *ptr = malloc(size ? size : 1);
-    if (!ptr) {
-        die("out of memory");
-    }
-    return ptr;
-}
-
-static void *xrealloc(void *ptr, size_t size) {
-    void *next = realloc(ptr, size ? size : 1);
-    if (!next) {
-        die("out of memory");
-    }
-    return next;
-}
-
-static char *xstrdup(const char *s) {
-    char *copy = strdup(s);
-    if (!copy) {
-        die("out of memory");
-    }
-    return copy;
-}
+#include "../common/cutil.h"
 
 static void usage(FILE *out) {
     fprintf(out,
@@ -64,115 +27,13 @@ static void usage(FILE *out) {
             "Requires OPENAI_API_KEY and curl. Writes native API PNG bytes; it does not resample.\n");
 }
 
-static bool file_exists(const char *path) {
-    struct stat st;
-    return stat(path, &st) == 0 && S_ISREG(st.st_mode);
-}
-
-static Buffer read_file(const char *path) {
-    FILE *f = fopen(path, "rb");
-    Buffer b = {0};
-    size_t cap = 0;
-
-    if (!f) {
-        die_errno(path);
-    }
-    for (;;) {
-        size_t got;
-        if (b.len + 4097 > cap) {
-            cap = cap ? cap * 2 : 8192;
-            b.data = xrealloc(b.data, cap);
-        }
-        got = fread(b.data + b.len, 1, 4096, f);
-        b.len += got;
-        if (got < 4096) {
-            if (ferror(f)) {
-                fclose(f);
-                free(b.data);
-                die_errno("read failed");
-            }
-            break;
-        }
-    }
-    fclose(f);
-    if (!b.data) {
-        b.data = xmalloc(1);
-    }
-    b.data[b.len] = '\0';
-    return b;
-}
-
-static void write_all(FILE *f, const void *data, size_t len) {
-    if (len && fwrite(data, 1, len, f) != len) {
-        die_errno("write failed");
-    }
-}
-
-static void write_file_bytes(const char *path, const unsigned char *data, size_t len) {
-    FILE *f = fopen(path, "wb");
-    if (!f) {
-        die_errno(path);
-    }
-    write_all(f, data, len);
-    if (fclose(f) != 0) {
-        die_errno(path);
-    }
-}
-
-static char *json_escape(const char *s) {
-    size_t len = 0;
-    char *out;
-    char *p;
-
-    for (const unsigned char *c = (const unsigned char *)s; *c; c++) {
-        switch (*c) {
-        case '\\':
-        case '"':
-        case '\b':
-        case '\f':
-        case '\n':
-        case '\r':
-        case '\t':
-            len += 2;
-            break;
-        default:
-            len += *c < 0x20 ? 6 : 1;
-            break;
-        }
-    }
-
-    out = xmalloc(len + 1);
-    p = out;
-    for (const unsigned char *c = (const unsigned char *)s; *c; c++) {
-        switch (*c) {
-        case '\\': *p++ = '\\'; *p++ = '\\'; break;
-        case '"': *p++ = '\\'; *p++ = '"'; break;
-        case '\b': *p++ = '\\'; *p++ = 'b'; break;
-        case '\f': *p++ = '\\'; *p++ = 'f'; break;
-        case '\n': *p++ = '\\'; *p++ = 'n'; break;
-        case '\r': *p++ = '\\'; *p++ = 'r'; break;
-        case '\t': *p++ = '\\'; *p++ = 't'; break;
-        default:
-            if (*c < 0x20) {
-                snprintf(p, 7, "\\u%04x", *c);
-                p += 6;
-            } else {
-                *p++ = (char)*c;
-            }
-            break;
-        }
-    }
-    *p = '\0';
-    return out;
-}
-
 static char *make_request_json(const char *model, const char *prompt, const char *size,
                                const char *quality, const char *format) {
-    char *m = json_escape(model);
-    char *p = json_escape(prompt);
-    char *s = json_escape(size);
-    char *q = json_escape(quality);
-    char *f = json_escape(format);
+    char *m = cu_json_escape_alloc(model);
+    char *p = cu_json_escape_alloc(prompt);
+    char *s = cu_json_escape_alloc(size);
+    char *q = cu_json_escape_alloc(quality);
+    char *f = cu_json_escape_alloc(format);
     int needed = snprintf(NULL, 0,
                           "{\"model\":\"%s\",\"prompt\":\"%s\",\"size\":\"%s\","
                           "\"quality\":\"%s\",\"output_format\":\"%s\",\"n\":1}\n",
@@ -180,9 +41,9 @@ static char *make_request_json(const char *model, const char *prompt, const char
     char *json;
 
     if (needed < 0) {
-        die("failed to build request JSON");
+        cu_die("failed to build request JSON");
     }
-    json = xmalloc((size_t)needed + 1);
+    json = cu_xmalloc((size_t)needed + 1);
     snprintf(json, (size_t)needed + 1,
              "{\"model\":\"%s\",\"prompt\":\"%s\",\"size\":\"%s\","
              "\"quality\":\"%s\",\"output_format\":\"%s\",\"n\":1}\n",
@@ -204,13 +65,13 @@ static char *make_temp_path(const char *suffix) {
         tmp = "/tmp";
     }
     if (snprintf(templ, sizeof(templ), "%s/foc_imagegen_XXXXXX", tmp) >= (int)sizeof(templ)) {
-        die("temporary path too long");
+        cu_die("temporary path too long");
     }
 
-    char *path = xstrdup(templ);
+    char *path = cu_xstrdup(templ);
     fd = mkstemp(path);
     if (fd < 0) {
-        die_errno("mkstemp failed");
+        cu_die_errno("mkstemp failed");
     }
     close(fd);
 
@@ -219,15 +80,15 @@ static char *make_temp_path(const char *suffix) {
         char *with_suffix;
         unlink(path);
         if (needed < 0) {
-            die("failed to build temporary path");
+            cu_die("failed to build temporary path");
         }
-        with_suffix = xmalloc((size_t)needed + 1);
+        with_suffix = cu_xmalloc((size_t)needed + 1);
         snprintf(with_suffix, (size_t)needed + 1, "%s%s", path, suffix);
         free(path);
         path = with_suffix;
         fd = open(path, O_CREAT | O_EXCL | O_WRONLY, 0600);
         if (fd < 0) {
-            die_errno("temporary create failed");
+            cu_die_errno("temporary create failed");
         }
         close(fd);
     }
@@ -239,20 +100,20 @@ static void write_text_file_0600(const char *path, const char *text) {
     FILE *f;
 
     if (fd < 0) {
-        die_errno(path);
+        cu_die_errno(path);
     }
     if (fchmod(fd, 0600) != 0) {
         close(fd);
-        die_errno("fchmod failed");
+        cu_die_errno("fchmod failed");
     }
     f = fdopen(fd, "wb");
     if (!f) {
         close(fd);
-        die_errno("fdopen failed");
+        cu_die_errno("fdopen failed");
     }
-    write_all(f, text, strlen(text));
+    cu_write_all(f, text, strlen(text));
     if (fclose(f) != 0) {
-        die_errno(path);
+        cu_die_errno(path);
     }
 }
 
@@ -261,7 +122,7 @@ static int run_curl(const char *config_path) {
     int status;
 
     if (pid < 0) {
-        die_errno("fork failed");
+        cu_die_errno("fork failed");
     }
     if (pid == 0) {
         execlp("curl", "curl", "--config", config_path, (char *)NULL);
@@ -272,7 +133,7 @@ static int run_curl(const char *config_path) {
             break;
         }
         if (errno != EINTR) {
-            die_errno("waitpid failed");
+            cu_die_errno("waitpid failed");
         }
     }
     if (WIFEXITED(status)) {
@@ -299,7 +160,7 @@ static char *extract_json_string(const char *json, const char *key) {
     size_t cap = 4096;
 
     if (snprintf(pattern, sizeof(pattern), "\"%s\"", key) >= (int)sizeof(pattern)) {
-        die("JSON key too long");
+        cu_die("JSON key too long");
     }
     p = strstr(json, pattern);
     if (!p) {
@@ -311,7 +172,7 @@ static char *extract_json_string(const char *json, const char *key) {
     while (*p && isspace((unsigned char)*p)) p++;
     if (*p++ != '"') return NULL;
 
-    out = xmalloc(cap);
+    out = cu_xmalloc(cap);
     while (*p) {
         unsigned char c = (unsigned char)*p++;
         if (c == '"') {
@@ -350,7 +211,7 @@ static char *extract_json_string(const char *json, const char *key) {
         }
         if (len + 2 > cap) {
             cap *= 2;
-            out = xrealloc(out, cap);
+            out = cu_xrealloc(out, cap);
         }
         out[len++] = (char)c;
     }
@@ -370,7 +231,7 @@ static int b64_value(char c) {
 static unsigned char *base64_decode(const char *s, size_t *out_len) {
     size_t slen = strlen(s);
     size_t cap = (slen / 4 + 1) * 3;
-    unsigned char *out = xmalloc(cap);
+    unsigned char *out = cu_xmalloc(cap);
     size_t len = 0;
     int vals[4];
     int n = 0;
@@ -388,7 +249,7 @@ static unsigned char *base64_decode(const char *s, size_t *out_len) {
             v = b64_value(c);
             if (v < 0) {
                 free(out);
-                die("invalid base64 in API response");
+                cu_die("invalid base64 in API response");
             }
             vals[n++] = v;
         }
@@ -396,19 +257,19 @@ static unsigned char *base64_decode(const char *s, size_t *out_len) {
         if (n == 4) {
             if (vals[0] < 0 || vals[1] < 0) {
                 free(out);
-                die("invalid base64 padding");
+                cu_die("invalid base64 padding");
             }
             out[len++] = (unsigned char)((vals[0] << 2) | (vals[1] >> 4));
             if (vals[2] != -2) {
                 if (vals[2] < 0) {
                     free(out);
-                    die("invalid base64 padding");
+                    cu_die("invalid base64 padding");
                 }
                 out[len++] = (unsigned char)(((vals[1] & 15) << 4) | (vals[2] >> 2));
                 if (vals[3] != -2) {
                     if (vals[3] < 0) {
                         free(out);
-                        die("invalid base64 padding");
+                        cu_die("invalid base64 padding");
                     }
                     out[len++] = (unsigned char)(((vals[2] & 3) << 6) | vals[3]);
                 }
@@ -418,7 +279,7 @@ static unsigned char *base64_decode(const char *s, size_t *out_len) {
     }
     if (n != 0) {
         free(out);
-        die("truncated base64 in API response");
+        cu_die("truncated base64 in API response");
     }
     *out_len = len;
     return out;
@@ -427,7 +288,7 @@ static unsigned char *base64_decode(const char *s, size_t *out_len) {
 static void validate_png_header(const unsigned char *data, size_t len) {
     static const unsigned char sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
     if (len < 24 || memcmp(data, sig, sizeof(sig)) != 0) {
-        die("API response did not decode to a PNG");
+        cu_die("API response did not decode to a PNG");
     }
 }
 
@@ -470,6 +331,8 @@ int main(int argc, char **argv) {
     bool dry_run = false;
     char *prompt_owned = NULL;
 
+    cu_set_program_name("foc_imagegen");
+
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
         if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
@@ -501,21 +364,21 @@ int main(int argc, char **argv) {
     }
 
     if (prompt && prompt_file) {
-        die("use --prompt or --prompt-file, not both");
+        cu_die("use --prompt or --prompt-file, not both");
     }
     if (prompt_file) {
-        Buffer b = read_file(prompt_file);
+        CuBuffer b = cu_read_file(prompt_file);
         prompt_owned = b.data;
         prompt = prompt_owned;
     }
     if (!prompt || !*prompt) {
-        die("missing --prompt or --prompt-file");
+        cu_die("missing --prompt or --prompt-file");
     }
     if (!out_path || !*out_path) {
-        die("missing --out");
+        cu_die("missing --out");
     }
-    if (!force && file_exists(out_path)) {
-        die("output exists; pass --force to overwrite");
+    if (!force && cu_file_exists(out_path)) {
+        cu_die("output exists; pass --force to overwrite");
     }
 
     char *request_json = make_request_json(model, prompt, size, quality, format);
@@ -528,15 +391,15 @@ int main(int argc, char **argv) {
 
     const char *api_key = getenv("OPENAI_API_KEY");
     if (!api_key || !*api_key) {
-        die("OPENAI_API_KEY is not set");
+        cu_die("OPENAI_API_KEY is not set");
     }
 
     char *request_path = make_temp_path(".json");
     char *response_path = make_temp_path(".json");
     char *config_path = make_temp_path(".curl");
-    char *escaped_request_path = json_escape(request_path);
-    char *escaped_response_path = json_escape(response_path);
-    char *escaped_api_key = json_escape(api_key);
+    char *escaped_request_path = cu_json_escape_alloc(request_path);
+    char *escaped_response_path = cu_json_escape_alloc(response_path);
+    char *escaped_api_key = cu_json_escape_alloc(api_key);
     int needed = snprintf(NULL, 0,
                           "url = \"https://api.openai.com/v1/images/generations\"\n"
                           "request = \"POST\"\n"
@@ -549,9 +412,9 @@ int main(int argc, char **argv) {
                           "fail-with-body\n",
                           escaped_api_key, escaped_request_path, escaped_response_path);
     if (needed < 0) {
-        die("failed to build curl config");
+        cu_die("failed to build curl config");
     }
-    char *config = xmalloc((size_t)needed + 1);
+    char *config = cu_xmalloc((size_t)needed + 1);
     snprintf(config, (size_t)needed + 1,
              "url = \"https://api.openai.com/v1/images/generations\"\n"
              "request = \"POST\"\n"
@@ -569,7 +432,7 @@ int main(int argc, char **argv) {
     fprintf(stderr, "foc_imagegen: calling Image API for native %s %s\n", size, format);
 
     int curl_code = run_curl(config_path);
-    Buffer response = read_file(response_path);
+    CuBuffer response = cu_read_file(response_path);
     if (curl_code != 0) {
         fprintf(stderr, "foc_imagegen: curl failed with exit code %d\n", curl_code);
         if (response.len) {
@@ -591,7 +454,7 @@ int main(int argc, char **argv) {
     size_t png_len = 0;
     unsigned char *png = base64_decode(b64, &png_len);
     validate_png_header(png, png_len);
-    write_file_bytes(out_path, png, png_len);
+    cu_write_file_bytes(out_path, png, png_len);
     print_png_dimensions(png, png_len);
 
     cleanup_temp_paths(request_path, response_path, config_path);

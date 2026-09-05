@@ -9,6 +9,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "../common/cutil.h"
+
 #ifndef PATH_MAX
 #define PATH_MAX 4096
 #endif
@@ -37,60 +39,10 @@ typedef struct {
     size_t cap;
 } WordList;
 
-static void die(const char *message) {
-    fprintf(stderr, "bob_vtt100: %s\n", message);
-    exit(1);
-}
-
-static void die_errno(const char *message) {
-    fprintf(stderr, "bob_vtt100: %s: %s\n", message, strerror(errno));
-    exit(1);
-}
-
-static void *xrealloc(void *ptr, size_t size) {
-    void *next = realloc(ptr, size);
-    if (!next) {
-        die("out of memory");
-    }
-    return next;
-}
-
-static char *xstrndup(const char *s, size_t len) {
-    char *copy = malloc(len + 1);
-    if (!copy) {
-        die("out of memory");
-    }
-    memcpy(copy, s, len);
-    copy[len] = '\0';
-    return copy;
-}
-
-static void mkdir_p(const char *path) {
-    char tmp[PATH_MAX];
-    size_t len = strlen(path);
-
-    if (len == 0 || len >= sizeof(tmp)) {
-        die("bad directory path");
-    }
-    memcpy(tmp, path, len + 1);
-    for (char *p = tmp + 1; *p; p++) {
-        if (*p == '/') {
-            *p = '\0';
-            if (mkdir(tmp, 0755) != 0 && errno != EEXIST) {
-                die_errno("mkdir failed");
-            }
-            *p = '/';
-        }
-    }
-    if (mkdir(tmp, 0755) != 0 && errno != EEXIST) {
-        die_errno("mkdir failed");
-    }
-}
-
 static void cue_add(CueList *list, double start, double end, char *text) {
     if (list->count == list->cap) {
         list->cap = list->cap ? list->cap * 2 : 256;
-        list->items = xrealloc(list->items, list->cap * sizeof(*list->items));
+        list->items = cu_xrealloc(list->items, list->cap * sizeof(*list->items));
     }
     list->items[list->count].start = start;
     list->items[list->count].end = end;
@@ -107,61 +59,17 @@ static void word_add(WordList *list, double start, double end, const char *text,
     }
     if (list->count == list->cap) {
         list->cap = list->cap ? list->cap * 2 : 1024;
-        list->items = xrealloc(list->items, list->cap * sizeof(*list->items));
+        list->items = cu_xrealloc(list->items, list->cap * sizeof(*list->items));
     }
     list->items[list->count].start = start;
     list->items[list->count].end = end;
-    list->items[list->count].text = xstrndup(text, len);
+    list->items[list->count].text = cu_xstrndup(text, len);
     list->count++;
-}
-
-static char *read_file(const char *path) {
-    FILE *f = fopen(path, "rb");
-    long len;
-    char *data;
-
-    if (!f) {
-        die_errno("open input failed");
-    }
-    if (fseek(f, 0, SEEK_END) != 0) {
-        die_errno("seek failed");
-    }
-    len = ftell(f);
-    if (len < 0) {
-        die_errno("tell failed");
-    }
-    rewind(f);
-    data = malloc((size_t)len + 1);
-    if (!data) {
-        die("out of memory");
-    }
-    if (fread(data, 1, (size_t)len, f) != (size_t)len) {
-        die_errno("read failed");
-    }
-    fclose(f);
-    data[len] = '\0';
-    return data;
 }
 
 static void trim_right(char *s) {
     size_t len = strlen(s);
     while (len > 0 && (s[len - 1] == '\n' || s[len - 1] == '\r' || isspace((unsigned char)s[len - 1]))) {
-        s[--len] = '\0';
-    }
-}
-
-static void trim_inplace(char *s) {
-    char *start = s;
-    size_t len;
-
-    while (*start && isspace((unsigned char)*start)) {
-        start++;
-    }
-    if (start != s) {
-        memmove(s, start, strlen(start) + 1);
-    }
-    len = strlen(s);
-    while (len > 0 && isspace((unsigned char)s[len - 1])) {
         s[--len] = '\0';
     }
 }
@@ -225,28 +133,25 @@ static void append_text(char **buf, size_t *len, size_t *cap, const char *text) 
     if (*len > 0 && (*buf)[*len - 1] != '\n') {
         if (*len + 2 > *cap) {
             *cap = (*cap ? *cap * 2 : 256);
-            *buf = xrealloc(*buf, *cap);
+            *buf = cu_xrealloc(*buf, *cap);
         }
         (*buf)[(*len)++] = '\n';
         (*buf)[*len] = '\0';
     }
     while (*len + add + 1 > *cap) {
         *cap = (*cap ? *cap * 2 : 256);
-        *buf = xrealloc(*buf, *cap);
+        *buf = cu_xrealloc(*buf, *cap);
     }
     memcpy(*buf + *len, text, add + 1);
     *len += add;
 }
 
 static char *clean_vtt_text(const char *raw) {
-    char *out = malloc(strlen(raw) + 1);
+    char *out = cu_xmalloc(strlen(raw) + 1);
     bool in_tag = false;
     bool last_space = true;
     char *w = out;
 
-    if (!out) {
-        die("out of memory");
-    }
     for (const char *p = raw; *p; p++) {
         unsigned char c = (unsigned char)*p;
         if (c == '<') {
@@ -298,7 +203,7 @@ static char *clean_vtt_text(const char *raw) {
 }
 
 static CueList parse_vtt(const char *path) {
-    char *data = read_file(path);
+    char *data = cu_read_text_file(path);
     char *cursor = data;
     char *line = strsep(&cursor, "\n");
     CueList cues = {0};
@@ -328,8 +233,8 @@ static CueList parse_vtt(const char *path) {
                 line = strsep(&cursor, "\n");
             }
             if (text && text[0]) {
-                char *raw = xstrndup(text, strlen(text));
-                trim_inplace(raw);
+                char *raw = cu_xstrndup(text, strlen(text));
+                cu_trim_inplace(raw);
                 if (raw[0]) {
                     cue_add(&cues, cue_start, cue_end, raw);
                 } else {
@@ -388,7 +293,7 @@ static void cues_to_words(const CueList *cues, WordList *words) {
                         prefix_start = scan + 1;
                     }
                 }
-                char *prefix = xstrndup(prefix_start, (size_t)(first_tag - prefix_start));
+                char *prefix = cu_xstrndup(prefix_start, (size_t)(first_tag - prefix_start));
                 char *clean = clean_vtt_text(prefix);
                 size_t nwords = count_words(clean);
                 const char *p = clean;
@@ -472,9 +377,9 @@ static void cues_to_words(const CueList *cues, WordList *words) {
                     }
                 }
 
-                chunk = xstrndup(chunk_start, (size_t)(chunk_end - chunk_start));
+                chunk = cu_xstrndup(chunk_start, (size_t)(chunk_end - chunk_start));
                 clean = clean_vtt_text(chunk);
-                trim_inplace(clean);
+                cu_trim_inplace(clean);
                 nwords = count_words(clean);
                 p = clean;
                 while (*p && nwords > 0) {
@@ -529,24 +434,6 @@ static void cues_to_words(const CueList *cues, WordList *words) {
     }
 }
 
-static void json_escape(FILE *out, const char *s) {
-    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
-        switch (*p) {
-        case '\\': fputs("\\\\", out); break;
-        case '"': fputs("\\\"", out); break;
-        case '\n': fputs("\\n", out); break;
-        case '\r': fputs("\\r", out); break;
-        case '\t': fputs("\\t", out); break;
-        default:
-            if (*p < 32) {
-                fprintf(out, "\\u%04x", *p);
-            } else {
-                fputc(*p, out);
-            }
-        }
-    }
-}
-
 static void slugify(const char *text, char *out, size_t out_size) {
     size_t w = 0;
     bool dash = false;
@@ -586,12 +473,12 @@ static void srt_time(FILE *out, double seconds) {
 static void write_word_jsonl(const char *path, const WordList *words) {
     FILE *out = fopen(path, "wb");
     if (!out) {
-        die_errno("open words jsonl failed");
+        cu_die_errno("open words jsonl failed");
     }
     for (size_t i = 0; i < words->count; i++) {
         fprintf(out, "{\"word_index\":%zu,\"start_seconds\":%.6f,\"end_seconds\":%.6f,\"word\":\"",
                 i + 1, words->items[i].start, words->items[i].end);
-        json_escape(out, words->items[i].text);
+        cu_json_escape_write(out, words->items[i].text);
         fputs("\"}\n", out);
     }
     fclose(out);
@@ -600,7 +487,7 @@ static void write_word_jsonl(const char *path, const WordList *words) {
 static void write_plain_text(const char *path, const WordList *words) {
     FILE *out = fopen(path, "wb");
     if (!out) {
-        die_errno("open text failed");
+        cu_die_errno("open text failed");
     }
     for (size_t i = 0; i < words->count; i++) {
         if (i) {
@@ -618,9 +505,9 @@ static void write_groups(const char *jsonl_path, const char *srt_path, const cha
     size_t segment = 0;
 
     if (!jsonl || !srt) {
-        die_errno("open group outputs failed");
+        cu_die_errno("open group outputs failed");
     }
-    mkdir_p(prompts_dir);
+    cu_mkdir_p(prompts_dir);
     DIR *dir = opendir(prompts_dir);
     if (dir) {
         struct dirent *entry;
@@ -659,7 +546,7 @@ static void write_groups(const char *jsonl_path, const char *srt_path, const cha
 
         fprintf(jsonl, "{\"segment_id\":\"%04zu\",\"segment_index\":%zu,\"start_seconds\":%.6f,\"end_seconds\":%.6f,\"word_start\":%zu,\"word_end\":%zu,\"image_filename\":\"%s\",\"text\":\"",
                 segment, segment, words->items[i].start, words->items[end - 1].end, i + 1, end, image);
-        json_escape(jsonl, text);
+        cu_json_escape_write(jsonl, text);
         fputs("\"}\n", jsonl);
 
         fprintf(srt, "%zu\n", segment);
@@ -671,7 +558,7 @@ static void write_groups(const char *jsonl_path, const char *srt_path, const cha
         snprintf(prompt_path, sizeof(prompt_path), "%s/%04zu.txt", prompts_dir, segment);
         FILE *prompt = fopen(prompt_path, "wb");
         if (!prompt) {
-            die_errno("open prompt failed");
+            cu_die_errno("open prompt failed");
         }
         fprintf(prompt,
                 "Use case: historical-scene\n"
@@ -683,7 +570,7 @@ static void write_groups(const char *jsonl_path, const char *srt_path, const cha
                 "Composition/framing: cinematic 16:9, clear central subject, no text labels, no subtitles in the image.\n"
                 "Constraints: no invented readable text, no watermark, no logo, no extra celebrity likeness unless explicitly named in the passage.\n"
                 "Transcript passage: \"");
-        json_escape(prompt, text);
+        cu_json_escape_write(prompt, text);
         fputs("\"\n", prompt);
         fclose(prompt);
     }
@@ -696,6 +583,8 @@ int main(int argc, char **argv) {
     CueList cues;
     WordList words = {0};
 
+    cu_set_program_name("bob_vtt100");
+
     if (argc != 7) {
         fprintf(stderr, "usage: %s INPUT.vtt OUT.txt WORDS.jsonl GROUPS.jsonl GROUPS.srt PROMPTS_DIR\n", argv[0]);
         return 2;
@@ -703,11 +592,11 @@ int main(int argc, char **argv) {
 
     cues = parse_vtt(argv[1]);
     if (cues.count == 0) {
-        die("no cues found in VTT");
+        cu_die("no cues found in VTT");
     }
     cues_to_words(&cues, &words);
     if (words.count == 0) {
-        die("no words found in VTT");
+        cu_die("no words found in VTT");
     }
     write_plain_text(argv[2], &words);
     write_word_jsonl(argv[3], &words);

@@ -5,6 +5,7 @@ workflows.
 
 The repository is organized by workflow domain:
 
+- `common/`: shared local helper code used by small workflow utilities
 - `audio/`: Field of Chaos text and audio pipeline helpers
 - `png render utils/`: Field of Chaos PNG render planning and verification
 - `aa_render_c/`: native AA rendering orchestration
@@ -77,6 +78,11 @@ The Bob media utilities from the local Jackson snapshot were added under:
 ```text
 bob media utils/
 ```
+
+The PNG render and Bob media tools share `common/cutil.[ch]` for fatal errors,
+checked allocation, small filesystem checks, recursive directory creation,
+whole-file reads, byte writes, trimming, suffix checks, and JSON escaping. That
+keeps the workflow tools focused on their own parsing and media/render logic.
 
 The EleisonScel library snapshot was added under:
 

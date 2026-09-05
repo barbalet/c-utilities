@@ -1,49 +1,15 @@
 #include <ctype.h>
-#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <sys/types.h>
 #include <unistd.h>
+
+#include "../common/cutil.h"
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
 #endif
-
-static void die(const char *message) {
-    fprintf(stderr, "bob_fetch_youtube: %s\n", message);
-    exit(1);
-}
-
-static void die_errno(const char *message) {
-    fprintf(stderr, "bob_fetch_youtube: %s: %s\n", message, strerror(errno));
-    exit(1);
-}
-
-static void mkdir_p(const char *path) {
-    char tmp[PATH_MAX];
-    size_t len = strlen(path);
-
-    if (len == 0 || len >= sizeof(tmp)) {
-        die("bad directory path");
-    }
-
-    memcpy(tmp, path, len + 1);
-    for (char *p = tmp + 1; *p; p++) {
-        if (*p == '/') {
-            *p = '\0';
-            if (mkdir(tmp, 0755) != 0 && errno != EEXIST) {
-                die_errno("mkdir failed");
-            }
-            *p = '/';
-        }
-    }
-    if (mkdir(tmp, 0755) != 0 && errno != EEXIST) {
-        die_errno("mkdir failed");
-    }
-}
 
 static char *shell_quote(const char *s) {
     size_t extra = 3;
@@ -51,10 +17,7 @@ static char *shell_quote(const char *s) {
         extra += (*p == '\'') ? 4 : 1;
     }
 
-    char *out = malloc(extra + 1);
-    if (!out) {
-        die("out of memory");
-    }
+    char *out = cu_xmalloc(extra + 1);
 
     char *w = out;
     *w++ = '\'';
@@ -100,7 +63,7 @@ static void first_existing_media(char *out, size_t out_size, const char *dir) {
         }
     }
 
-    die("downloaded source media was not found");
+    cu_die("downloaded source media was not found");
 }
 
 int main(int argc, char **argv) {
@@ -117,6 +80,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: %s URL AUDIO_DIR TRANSCRIPT_DIR [YT_DLP]\n", argv[0]);
         return 2;
     }
+    cu_set_program_name("bob_fetch_youtube");
+
     if (argc == 5) {
         ytdlp = argv[4];
     }
@@ -125,8 +90,8 @@ int main(int argc, char **argv) {
     clean_url(url);
     snprintf(audio_dir, sizeof(audio_dir), "%s", argv[2]);
     snprintf(transcript_dir, sizeof(transcript_dir), "%s", argv[3]);
-    mkdir_p(audio_dir);
-    mkdir_p(transcript_dir);
+    cu_mkdir_p(audio_dir);
+    cu_mkdir_p(transcript_dir);
 
     char *q_ytdlp = shell_quote(ytdlp);
     char *q_url = shell_quote(url);

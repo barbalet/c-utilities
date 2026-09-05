@@ -6,6 +6,8 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#include "../common/cutil.h"
+
 #ifndef PATH_MAX
 #define PATH_MAX 4096
 #endif
@@ -22,61 +24,12 @@ typedef struct {
     size_t cap;
 } Rows;
 
-static void die(const char *message) {
-    fprintf(stderr, "bob_mux: %s\n", message);
-    exit(1);
-}
-
-static void die_errno(const char *message) {
-    fprintf(stderr, "bob_mux: %s: %s\n", message, strerror(errno));
-    exit(1);
-}
-
-static void *xrealloc(void *ptr, size_t size) {
-    void *next = realloc(ptr, size);
-    if (!next) {
-        die("out of memory");
-    }
-    return next;
-}
-
-static char *read_file(const char *path) {
-    FILE *f = fopen(path, "rb");
-    long len;
-    char *data;
-
-    if (!f) {
-        die_errno("open input failed");
-    }
-    if (fseek(f, 0, SEEK_END) != 0) {
-        die_errno("seek failed");
-    }
-    len = ftell(f);
-    if (len < 0) {
-        die_errno("tell failed");
-    }
-    rewind(f);
-    data = malloc((size_t)len + 1);
-    if (!data) {
-        die("out of memory");
-    }
-    if (fread(data, 1, (size_t)len, f) != (size_t)len) {
-        die_errno("read failed");
-    }
-    fclose(f);
-    data[len] = '\0';
-    return data;
-}
-
 static char *shell_quote(const char *s) {
     size_t extra = 3;
     for (const char *p = s; *p; p++) {
         extra += (*p == '\'') ? 4 : 1;
     }
-    char *out = malloc(extra + 1);
-    if (!out) {
-        die("out of memory");
-    }
+    char *out = cu_xmalloc(extra + 1);
     char *w = out;
     *w++ = '\'';
     for (const char *p = s; *p; p++) {
@@ -104,10 +57,7 @@ static bool extract_json_string(const char *line, const char *key, char **out) {
         return false;
     }
     start = p + strlen(pattern);
-    w = malloc(strlen(start) + 1);
-    if (!w) {
-        die("out of memory");
-    }
+    w = cu_xmalloc(strlen(start) + 1);
     *out = w;
     for (p = start; *p; p++) {
         if (*p == '\\' && p[1]) {
@@ -144,7 +94,7 @@ static bool extract_json_double(const char *line, const char *key, double *out) 
 static void rows_add(Rows *rows, char *image, double start, double end) {
     if (rows->count == rows->cap) {
         rows->cap = rows->cap ? rows->cap * 2 : 128;
-        rows->items = xrealloc(rows->items, rows->cap * sizeof(*rows->items));
+        rows->items = cu_xrealloc(rows->items, rows->cap * sizeof(*rows->items));
     }
     rows->items[rows->count].image = image;
     rows->items[rows->count].start = start;
@@ -153,7 +103,7 @@ static void rows_add(Rows *rows, char *image, double start, double end) {
 }
 
 static Rows load_rows(const char *path) {
-    char *data = read_file(path);
+    char *data = cu_read_text_file(path);
     char *save = NULL;
     char *line = strtok_r(data, "\n", &save);
     Rows rows = {0};
@@ -175,7 +125,7 @@ static Rows load_rows(const char *path) {
     }
     free(data);
     if (rows.count == 0) {
-        die("no timing rows loaded");
+        cu_die("no timing rows loaded");
     }
     return rows;
 }
@@ -183,7 +133,7 @@ static Rows load_rows(const char *path) {
 static void write_concat(const char *path, const char *images_dir, const Rows *rows) {
     FILE *out = fopen(path, "wb");
     if (!out) {
-        die_errno("open concat failed");
+        cu_die_errno("open concat failed");
     }
     fputs("ffconcat version 1.0\n", out);
     for (size_t i = 0; i < rows->count; i++) {
@@ -219,6 +169,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: %s GROUPS.jsonl IMAGES_DIR AUDIO.wav OUTPUT.mp4 CONCAT.ffconcat FPS\n", argv[0]);
         return 2;
     }
+    cu_set_program_name("bob_mux");
 
     rows = load_rows(argv[1]);
     write_concat(argv[5], argv[2], &rows);
