@@ -6,7 +6,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#include "../common/cutil.h"
+#include "cutil.h"
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096

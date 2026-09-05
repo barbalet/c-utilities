@@ -1,20 +1,86 @@
 # C Utilities
 
-Native C utility programs for Codex-adjacent media, render, and Field of Chaos
-workflows.
+Native C tools for audio, transcripts, PNG planning, and media rendering.
 
-The repository is organized by workflow domain:
+## Layout
 
-- `common/`: shared local helper code used by small workflow utilities
-- `audio/`: Field of Chaos text and audio pipeline helpers
-- `png render utils/`: Field of Chaos PNG render planning and verification
-- `aa_render_c/`: native AA rendering orchestration
-- `bob media utils/`: Bob media preparation utilities copied from the local
-  Jackson snapshot
-- `third_party/eleisonscel-c-utilities/`: Apache-2.0 EleisonScel C utility
-  library snapshot, kept separate from the workflow-specific utilities
+The repository has three top-level code directories:
 
-## Latest GitHub State
+- `media/`: all workflow executables, one Makefile, and workflow documentation.
+- `support/`: shared local helpers (`cutil.[ch]` and `foc_common.[ch]`).
+- `third_party/`: the separate Apache-2.0 EleisonScel library snapshot.
+
+The previous `audio/`, `bob media utils/`, `png render utils/`, and
+`aa_render_c/` sources are consolidated directly into `media/`. The previous
+`common/` helpers and audio's `foc_common.[ch]` now live in `support/`.
+Executable names and command arguments are preserved; all executables now live
+in `media/bin/`.
+
+## Build
+
+From the repository root:
+
+```sh
+make -C media          # All 26 tools, including the AA renderer
+make -C media core     # 25 audio, Bob, and PNG tools
+make -C media audio    # Field of Chaos audio tools
+make -C media bob      # Bob media tools
+make -C media png      # foc_prepare and foc_imagegen
+make -C media aa       # AA renderer
+```
+
+The core tools require a C compiler and standard/POSIX development headers.
+The AA renderer additionally requires OpenSSL. Its JSON implementation is
+self-contained in `support/json_compat.c` and `support/json_compat.h`; no JSON
+library or pkg-config installation is required.
+Its Makefile defaults `OPENSSL_PREFIX` to `/opt/homebrew/opt/openssl@3`;
+override it for another installation.
+
+```sh
+make -C media test     # JSON tests and AA inventory smoke test
+make -C media test-json # Standalone JSON implementation tests
+make -C media test AA_INVENTORY_DIR=/path/to/recordings
+make -C media clean    # Recursively remove compiled code throughout the repository
+```
+
+`foc-status` and `foc-finalize` remain available through `make -C media`.
+Their `FOC_*` path settings are interpreted relative to `media/` when using
+`-C media`; override them to point to your workflow data.
+
+## Clean compiled files
+
+From the repository root, run:
+
+```sh
+./clean.py --dry-run
+./clean.py
+```
+
+The Python 3 script recursively removes `.o`/`.obj` files and recognizes compiled
+executables, shared libraries, static archives, and WebAssembly by their file
+headers. It preserves source, scripts, media assets, and version-control metadata;
+it does not follow symbolic links. Its default root is the script's directory,
+so it also works when invoked from another working directory. `make -C media clean`
+runs the same script. Use `--root /path/to/tree` to choose another tree explicitly.
+
+## Workflow documentation
+
+- [Audio and TTS cache tools](media/AUDIO.md)
+- [Bob media preparation](media/BOB.md)
+- [PNG planning and image generation](media/PNG.md)
+- [AA rendering](media/AA_RENDER_C.md)
+- [Shared helpers](support/README.md)
+- [Third-party provenance and license](third_party/eleisonscel-c-utilities/README.md)
+
+The original audio license is preserved in `media/AUDIO_LICENSE`; it also
+covers the relocated `support/foc_common.[ch]` files. The imported third-party
+library retains its own license and internal layout.
+
+Generated executables and object files under `media/bin/` are ignored by Git.
+The PNG source includes expanded-frame materialization (`fill-expanded-copies`)
+and the `foc_imagegen` utility. Bob sources came from the local Jackson snapshot.
+
+## Import provenance
 
 The latest public GitHub version checked before importing the EleisonScel
 snapshot was:
@@ -42,8 +108,7 @@ The recent commit history shows the current direction of the repo:
 - `d15cb61`: update utilities from the use path
 - `6f91282`: initial commit
 
-That history is why this checkout keeps the existing workflow-oriented layout
-instead of flattening every utility into one source directory.
+These workflow snapshots were subsequently consolidated into the layout above.
 
 ## Local `c-utilities` Directories Found
 
@@ -56,72 +121,5 @@ The scoped search found these local directories named `c-utilities`:
 - `/Users/barbalet/Documents/ChatGPT/jackson/quidjibo/tools/c-utilities`
 - `/Users/barbalet/Documents/ChatGPT/jackson/quidjibo/movetoazaz/tools/c-utilities`
 
-The target GitHub checkout is `/Users/barbalet/next/github/next/c-utilities`.
-It was already at the latest GitHub commit above before the current import.
-
-## What Was Added
-
-The PNG render utility source was refreshed from the fuller local
-`leicester_ymca/jackson` copy, which includes expanded-frame materialization via
-`fill-expanded-copies`.
-
-The PNG render folder also now includes the `foc_imagegen` source from the local
-`azaz/trainingdata/movetoazaz` copy. Its Makefile builds both PNG render tools:
-
-```sh
-cd "png render utils"
-make
-```
-
-The Bob media utilities from the local Jackson snapshot were added under:
-
-```text
-bob media utils/
-```
-
-The PNG render and Bob media tools share `common/cutil.[ch]` for fatal errors,
-checked allocation, small filesystem checks, recursive directory creation,
-whole-file reads, byte writes, trimming, suffix checks, and JSON escaping. That
-keeps the workflow tools focused on their own parsing and media/render logic.
-
-The EleisonScel library snapshot was added under:
-
-```text
-third_party/eleisonscel-c-utilities/
-```
-
-It contains the upstream `include/c-utilities/` headers, `src/` sources,
-Apache-2.0 license, and upstream README material. It is kept as a third-party
-library snapshot because it is a general reusable C support library, while the
-rest of this repository is organized around local media and render workflows.
-
-## Build
-
-Build each workflow independently:
-
-```sh
-make -C audio
-make -C "png render utils"
-make -C "bob media utils"
-make -C aa_render_c -f Makefile.aa_render_c
-```
-
-The AA renderer Makefile also provides its own smoke-test target:
-
-```sh
-make -C aa_render_c -f Makefile.aa_render_c clean all test
-```
-
-## Size And Generated Files
-
-The repo is intentionally kept small.
-
-- No copied file is larger than 30 MB.
-- No copied directory is larger than 30 MB.
-- Object files are ignored with `*.o`.
-- Generated executable binaries are ignored by name.
-- Existing tracked object artifacts and executable binaries were removed from
-  this checkout.
-
-The committed tree should contain source, documentation, and build recipes only.
-Run the Makefiles locally whenever the utilities need to be rebuilt.
+The import target GitHub checkout was `/Users/barbalet/next/github/next/c-utilities`.
+It was at the GitHub commit recorded above before the library import.

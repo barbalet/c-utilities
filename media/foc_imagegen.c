@@ -9,7 +9,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "../common/cutil.h"
+#include "cutil.h"
 
 static void usage(FILE *out) {
     fprintf(out,

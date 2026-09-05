@@ -7,7 +7,7 @@ they cover a separate media-preparation workflow.
 ## Build
 
 ```sh
-make
+make -C media bob
 ```
 
 This builds:
@@ -27,6 +27,4 @@ outputs.
 
 `bob_vtt100` processes WebVTT-style timed text into the local Bob workflow.
 
-The copied prebuilt binaries are included because they are small and were part
-of the local source directory. Rebuilding with `make -B` verifies the current
-machine can produce fresh versions from source.
+Executables are built in `media/bin/`. Shared helpers live in `support/`.

@@ -8,7 +8,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "../common/cutil.h"
+#include "cutil.h"
 
 typedef struct {
     char *name;

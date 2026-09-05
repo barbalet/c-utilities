@@ -3,7 +3,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <json-c/json.h>
+#include "json_compat.h"
 #include <math.h>
 #include <openssl/evp.h>
 #include <stdarg.h>

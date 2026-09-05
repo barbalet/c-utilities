@@ -28,19 +28,19 @@ These tools replace Python for fast script/audio plumbing:
 Build:
 
 ```sh
-make -C c_utilities
+make -C media audio
 ```
 
 Example:
 
 ```sh
-c_utilities/bin/foc_plan text/foc_script_txt/foc_script.txt .cache/chatterbox/foc_script_segments 600 0.18
+media/bin/foc_plan text/foc_script_txt/foc_script.txt .cache/chatterbox/foc_script_segments 600 0.18
 ```
 
 Useful after a full render:
 
 ```sh
-make -C c_utilities foc-finalize
+make -C media foc-finalize
 ```
 
 Current native optimizations:

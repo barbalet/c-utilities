@@ -1,10 +1,4 @@
 *.o
 .DS_Store
 *.dSYM/
-/audio/bin/
-/aa_render_c/aa_render_c
-/bob media utils/bob_fetch_youtube
-/bob media utils/bob_mux
-/bob media utils/bob_vtt100
-/png render utils/foc_imagegen
-/png render utils/foc_prepare
+/media/bin/
