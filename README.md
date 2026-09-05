@@ -10,20 +10,25 @@ The repository is organized by workflow domain:
 - `aa_render_c/`: native AA rendering orchestration
 - `bob media utils/`: Bob media preparation utilities copied from the local
   Jackson snapshot
+- `third_party/eleisonscel-c-utilities/`: Apache-2.0 EleisonScel C utility
+  library snapshot, kept separate from the workflow-specific utilities
 
 ## Latest GitHub State
 
-The latest public GitHub version checked for this work is:
+The latest public GitHub version checked before importing the EleisonScel
+snapshot was:
 
 - Repository: `barbalet/c-utilities`
 - URL: <https://github.com/barbalet/c-utilities>
 - Branch: `main`
-- Commit: `fcaeff4b75c9c3a67bcf1e058d02b4a0cca8233d`
-- Commit date: 2026-09-04 20:27:31 UTC
-- Commit message: `Add aa rendering method`
+- Commit: `d759e338aa3193862f068777d538d709e3fea14b`
+- Commit date: 2026-09-04 20:46:50 UTC
+- Commit message: `Remove committed executables`
 
 The recent commit history shows the current direction of the repo:
 
+- `d759e33`: remove committed executables
+- `427a45c`: organize C utility snapshots
 - `fcaeff4`: add the native AA rendering method
 - `6c28e92`: update utilities
 - `d9a2cad`: update README content
@@ -72,6 +77,17 @@ The Bob media utilities from the local Jackson snapshot were added under:
 ```text
 bob media utils/
 ```
+
+The EleisonScel library snapshot was added under:
+
+```text
+third_party/eleisonscel-c-utilities/
+```
+
+It contains the upstream `include/c-utilities/` headers, `src/` sources,
+Apache-2.0 license, and upstream README material. It is kept as a third-party
+library snapshot because it is a general reusable C support library, while the
+rest of this repository is organized around local media and render workflows.
 
 ## Build
 
